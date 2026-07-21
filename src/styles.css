@@ -186,6 +186,7 @@
   }
   .icon-btn:hover{ color:var(--gold); border-color:var(--gold-dim); }
   .icon-btn svg{ width:13px; height:13px; }
+  .icon-btn.danger:hover{ color:var(--red); border-color:var(--red); }
 
   .add-btn{
     width:26px; height:26px;
@@ -267,6 +268,7 @@
     transition:all .12s ease;
   }
   .client-list li:hover{ background:var(--panel-alt); color:var(--ink); }
+  .client-list li .name{ flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .client-list li.active{
     background:var(--panel-alt);
     border-left:3px solid var(--gold);
@@ -356,7 +358,8 @@
     border-color:var(--gold);
     background:linear-gradient(180deg, rgba(201,161,58,0.08), transparent);
   }
-  .project-list li .p-title{ font-size:13.5px; color:var(--ink); font-weight:500; }
+  .project-list li .p-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .project-list li .p-title{ font-size:13.5px; color:var(--ink); font-weight:500; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .project-list li .p-meta{
     font-family:'IBM Plex Mono', monospace;
     font-size:10px;
@@ -789,3 +792,9 @@
     color:#1a1508;
   }
   .btn-primary:hover{ filter:brightness(1.08); }
+  .btn-primary.btn-danger{
+    background:linear-gradient(180deg, #c14a37, var(--red));
+    border-color:var(--red);
+    color:#f5e9e3;
+  }
+  .btn-primary.btn-danger:hover{ filter:brightness(1.1); }

@@ -1,3 +1,5 @@
+  const TRASH_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
+
   // ---------- MOCK DATA (temporaire — remplacé par des appels invoke() en Phase 4) ----------
   const clients = [
     {
@@ -60,8 +62,17 @@
         const li = document.createElement('li');
         li.className = c.id === activeClientId ? 'active' : '';
         li.tabIndex = 0;
-        li.innerHTML = `<span class="dot"></span><span>${c.nom}</span>`;
+        li.innerHTML = `
+          <span class="dot"></span><span class="name">${c.nom}</span>
+          <button class="icon-btn danger" title="Supprimer ce client">${TRASH_SVG}</button>
+        `;
         li.addEventListener('click', () => selectClient(c.id));
+        li.querySelector('.icon-btn.danger').addEventListener('click', (e) => {
+          e.stopPropagation();
+          openConfirmModal('Supprimer le client',
+            `Supprimer « ${c.nom} » et l'ensemble de ses projets (${c.projets.length}) ? Cette action est irréversible.`,
+            () => deleteClient(c.id));
+        });
         clientListEl.appendChild(li);
       });
   }
@@ -72,6 +83,20 @@
     renderClientList(clientSearchEl.value);
     renderClientDetail();
     renderProjectDetail();
+  }
+
+  function deleteClient(id){
+    const idx = clients.findIndex(x => x.id === id);
+    if(idx === -1) return;
+    clients.splice(idx, 1);
+    if(activeClientId === id){
+      activeClientId = null;
+      activeProjectIdx = null;
+      if(clients.length){ selectClient(clients[0].id); }
+      else { renderClientList(clientSearchEl.value); renderClientDetail(); renderProjectDetail(); }
+    } else {
+      renderClientList(clientSearchEl.value);
+    }
   }
 
   function renderClientDetail(){
@@ -108,15 +133,34 @@
       li.className = idx === activeProjectIdx ? 'active' : '';
       li.tabIndex = 0;
       li.innerHTML = `
-        <div class="p-title">${p.titre}</div>
+        <div class="p-row">
+          <div class="p-title">${p.titre}</div>
+          <button class="icon-btn danger" title="Supprimer ce projet">${TRASH_SVG}</button>
+        </div>
         <div class="p-meta">
           <span>${p.genre}</span>
           <span class="status-chip ${statusClass[p.statut]}">${statusLabel[p.statut]}</span>
         </div>
       `;
       li.addEventListener('click', () => { activeProjectIdx = idx; renderProjectList(projectSearchEl.value); renderProjectDetail(); });
+      li.querySelector('.icon-btn.danger').addEventListener('click', (e) => {
+        e.stopPropagation();
+        openConfirmModal('Supprimer le projet',
+          `Supprimer le projet « ${p.titre} » ? Cette action est irréversible.`,
+          () => deleteProject(idx));
+      });
       projectListEl.appendChild(li);
     });
+  }
+
+  function deleteProject(idx){
+    const c = clients.find(x => x.id === activeClientId);
+    if(!c) return;
+    c.projets.splice(idx, 1);
+    if(activeProjectIdx === idx){ activeProjectIdx = null; }
+    else if(activeProjectIdx !== null && activeProjectIdx > idx){ activeProjectIdx--; }
+    renderProjectList(projectSearchEl.value);
+    renderProjectDetail();
   }
 
   function renderProjectDetail(){
@@ -151,10 +195,12 @@
   const modalSubmitBtn = document.getElementById('modalSubmit');
   let modalSubmitHandler = null;
 
-  function openModal(title, bodyHtml, onSubmit){
+  function openModal(title, bodyHtml, onSubmit, options = {}){
     modalTitleEl.textContent = title;
     modalBodyEl.innerHTML = bodyHtml;
     modalSubmitHandler = onSubmit;
+    modalSubmitBtn.textContent = options.submitLabel || 'Enregistrer';
+    modalSubmitBtn.classList.toggle('btn-danger', !!options.danger);
     modalOverlay.classList.add('active');
     const firstInput = modalBodyEl.querySelector('input, select, textarea');
     if(firstInput) setTimeout(() => firstInput.focus(), 50);
@@ -163,12 +209,20 @@
     modalOverlay.classList.remove('active');
     modalBodyEl.innerHTML = '';
     modalSubmitHandler = null;
+    modalSubmitBtn.textContent = 'Enregistrer';
+    modalSubmitBtn.classList.remove('btn-danger');
   }
   modalCloseBtn.addEventListener('click', closeModal);
   modalCancelBtn.addEventListener('click', closeModal);
   modalOverlay.addEventListener('click', (e) => { if(e.target === modalOverlay) closeModal(); });
   document.addEventListener('keydown', (e) => { if(e.key === 'Escape' && modalOverlay.classList.contains('active')) closeModal(); });
   modalSubmitBtn.addEventListener('click', () => { if(modalSubmitHandler) modalSubmitHandler(); });
+
+  function openConfirmModal(title, message, onConfirm){
+    openModal(title, `<p style="margin:0; font-size:13.5px; line-height:1.6; color:var(--ink);">${message}</p>`,
+      () => { onConfirm(); closeModal(); },
+      { submitLabel: 'Supprimer', danger: true });
+  }
 
   function isoToFr(iso){
     if(!iso) return '—';
