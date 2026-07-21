@@ -1,14 +1,10 @@
+mod commands;
 mod db;
+mod models;
 mod seed;
 
 use std::sync::Mutex;
 use tauri::Manager;
-
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -20,7 +16,17 @@ pub fn run() {
             app.manage(db::DbState(Mutex::new(conn)));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![
+            commands::list_clients,
+            commands::get_client,
+            commands::create_client,
+            commands::update_client,
+            commands::delete_client,
+            commands::list_projets,
+            commands::create_projet,
+            commands::update_projet,
+            commands::delete_projet,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
