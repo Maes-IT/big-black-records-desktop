@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Client {
     pub id: i64,
@@ -11,7 +11,7 @@ pub struct Client {
     pub observation: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewClient {
     pub nom: String,
@@ -21,7 +21,7 @@ pub struct NewClient {
     pub observation: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Projet {
     pub id: i64,
@@ -37,7 +37,7 @@ pub struct Projet {
     pub solde: Option<i64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewProjet {
     pub client_id: i64,
@@ -52,7 +52,7 @@ pub struct NewProjet {
     pub solde: Option<i64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FiltreCriteria {
     pub nom_groupe: Option<String>,
@@ -70,7 +70,7 @@ pub struct FiltreCriteria {
     pub reste_max: Option<f64>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FiltreResult {
     pub id: i64,
@@ -90,14 +90,14 @@ pub struct FiltreResult {
     pub reste: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuartierCount {
     pub quartier: String,
     pub count: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImpayeItem {
     pub client_nom: String,
@@ -106,7 +106,7 @@ pub struct ImpayeItem {
     pub solde: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DashboardStats {
     pub quartiers: Vec<QuartierCount>,
@@ -121,7 +121,7 @@ pub struct DashboardStats {
     pub impayes: Vec<ImpayeItem>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DettesComparaison {
     pub a: i64,
