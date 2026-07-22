@@ -1,46 +1,53 @@
+  const { invoke } = window.__TAURI__.core;
+
   const TRASH_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
 
-  // ---------- MOCK DATA (temporaire — remplacé par des appels invoke() en Phase 4) ----------
-  const clients = [
-    {
-      id: 1, nom: "Kaiamba Quartet", responsable: "Rija Andriamora", tel: "034 12 345 67",
-      quartier: "Analakely, Antananarivo", obs: "Groupe régulier, préfère les sessions en soirée.",
-      projets: [
-        { titre: "Tany Malalako — EP", genre: "Salegy", statut: "en-cours", avance: "150 000 Ar", cachet: "600 000 Ar", creation: "03/02/2026", livraison: "28/07/2026", paiement:"paye" },
-        { titre: "Live Session Vol.1", genre: "Salegy Fusion", statut: "termine", avance: "300 000 Ar", cachet: "300 000 Ar", creation: "11/11/2025", livraison: "20/12/2025", paiement:"paye" },
-      ]
-    },
-    {
-      id: 2, nom: "Voky Groove", responsable: "Nomena Rakoto", tel: "032 98 765 43",
-      quartier: "Ivandry, Antananarivo", obs: "Enregistrement à distance possible, envoie les stems par WeTransfer.",
-      projets: [
-        { titre: "Riake — Single", genre: "Afro-Groove", statut: "attente", avance: "0 Ar", cachet: "250 000 Ar", creation: "09/07/2026", livraison: "—", paiement:"impaye", solde:"5 000 Ar" },
-      ]
-    },
-    {
-      id: 3, nom: "Zafy & The Riddim", responsable: "Fenosoa Randria", tel: "033 45 678 90",
-      quartier: "Tsaralalàna, Antananarivo", obs: "",
-      projets: [
-        { titre: "Malaza Anao — Album", genre: "Reggae Gasy", statut: "en-cours", avance: "400 000 Ar", cachet: "1 200 000 Ar", creation: "15/04/2026", livraison: "30/09/2026", paiement:"paye" },
-        { titre: "Freestyle Kilalaky", genre: "Kilalaky", statut: "en-cours", avance: "50 000 Ar", cachet: "200 000 Ar", creation: "01/06/2026", livraison: "10/08/2026", paiement:"impaye", solde:"10 000 Ar" },
-      ]
-    },
-    {
-      id: 4, nom: "Malaza Sons", responsable: "Hery Ravelo", tel: "034 76 543 21",
-      quartier: "Ambohipo, Antananarivo", obs: "Groupe en tournée jusqu'en septembre.",
-      projets: [
-        { titre: "Firaisana — EP", genre: "Hip-Hop Gasy", statut: "termine", avance: "900 000 Ar", cachet: "900 000 Ar", creation: "20/09/2025", livraison: "18/01/2026", paiement:"paye" },
-      ]
-    },
-    {
-      id: 5, nom: "Tanindrazana", responsable: "Miora Rasolofo", tel: "032 11 222 33",
-      quartier: "Ankadifotsy, Antananarivo", obs: "Sensible sur les délais, envoyer un rappel 48h avant.",
-      projets: []
-    },
-  ];
+  // ---------- Adaptateurs DB (SQLite via invoke) -> forme historique du prototype ----------
+  // Le reste du fichier (T.D.B, Filtre, exports) a été écrit contre cette forme (tel/obs,
+  // montants et dates déjà formatés) : on la reconstruit ici pour éviter de tout retoucher.
+  function clientFromRow(row, projets){
+    return {
+      id: row.id,
+      nom: row.nom,
+      responsable: row.responsable,
+      tel: row.telephone,
+      quartier: row.quartier,
+      obs: row.observation,
+      projets,
+    };
+  }
+
+  function projetFromRow(row){
+    const p = {
+      id: row.id,
+      titre: row.titre,
+      genre: row.genre,
+      statut: row.statut,
+      avance: formatAr(row.avance),
+      cachet: formatAr(row.cachet),
+      creation: isoToFr(row.dateCreation),
+      livraison: row.dateLivraison ? isoToFr(row.dateLivraison) : '—',
+      paiement: row.statutPaiement,
+    };
+    if(row.solde != null) p.solde = formatAr(row.solde);
+    return p;
+  }
+
+  async function loadClients(){
+    const rows = await invoke('list_clients');
+    const loaded = [];
+    for(const row of rows){
+      const projetRows = await invoke('list_projets', { clientId: row.id });
+      loaded.push(clientFromRow(row, projetRows.map(projetFromRow)));
+    }
+    return loaded;
+  }
+
+  // ---------- DONNÉES (chargées depuis SQLite au démarrage, voir init() en bas de fichier) ----------
+  let clients = [];
 
   let activeClientId = null;
-  let activeProjectIdx = null;
+  let activeProjectId = null;
 
   const statusLabel = { "en-cours": "En cours", "termine": "Terminé", "attente": "En attente" };
   const statusClass = { "en-cours": "status-en-cours", "termine": "status-termine", "attente": "status-attente" };
@@ -79,19 +86,25 @@
 
   function selectClient(id){
     activeClientId = id;
-    activeProjectIdx = null;
+    activeProjectId = null;
     renderClientList(clientSearchEl.value);
     renderClientDetail();
     renderProjectDetail();
   }
 
-  function deleteClient(id){
+  async function deleteClient(id){
+    try {
+      await invoke('delete_client', { id });
+    } catch(err) {
+      alert(String(err));
+      return;
+    }
     const idx = clients.findIndex(x => x.id === id);
     if(idx === -1) return;
     clients.splice(idx, 1);
     if(activeClientId === id){
       activeClientId = null;
-      activeProjectIdx = null;
+      activeProjectId = null;
       if(clients.length){ selectClient(clients[0].id); }
       else { renderClientList(clientSearchEl.value); renderClientDetail(); renderProjectDetail(); }
     } else {
@@ -123,14 +136,14 @@
     projectListEl.innerHTML = "";
     if(!c) return;
     const q = filter.trim().toLowerCase();
-    const filtered = c.projets.map((p, idx) => ({p, idx})).filter(({p}) => p.titre.toLowerCase().includes(q));
+    const filtered = c.projets.filter(p => p.titre.toLowerCase().includes(q));
     if(filtered.length === 0){
       projectListEl.innerHTML = `<li style="cursor:default; text-align:center; color:var(--ink-dim-solid); font-size:12.5px;">Aucun projet</li>`;
       return;
     }
-    filtered.forEach(({p, idx}) => {
+    filtered.forEach(p => {
       const li = document.createElement('li');
-      li.className = idx === activeProjectIdx ? 'active' : '';
+      li.className = p.id === activeProjectId ? 'active' : '';
       li.tabIndex = 0;
       li.innerHTML = `
         <div class="p-row">
@@ -142,30 +155,36 @@
           <span class="status-chip ${statusClass[p.statut]}">${statusLabel[p.statut]}</span>
         </div>
       `;
-      li.addEventListener('click', () => { activeProjectIdx = idx; renderProjectList(projectSearchEl.value); renderProjectDetail(); });
+      li.addEventListener('click', () => { activeProjectId = p.id; renderProjectList(projectSearchEl.value); renderProjectDetail(); });
       li.querySelector('.icon-btn.danger').addEventListener('click', (e) => {
         e.stopPropagation();
         openConfirmModal('Supprimer le projet',
           `Supprimer le projet « ${p.titre} » ? Cette action est irréversible.`,
-          () => deleteProject(idx));
+          () => deleteProject(p.id));
       });
       projectListEl.appendChild(li);
     });
   }
 
-  function deleteProject(idx){
+  async function deleteProject(id){
+    try {
+      await invoke('delete_projet', { id });
+    } catch(err) {
+      alert(String(err));
+      return;
+    }
     const c = clients.find(x => x.id === activeClientId);
     if(!c) return;
-    c.projets.splice(idx, 1);
-    if(activeProjectIdx === idx){ activeProjectIdx = null; }
-    else if(activeProjectIdx !== null && activeProjectIdx > idx){ activeProjectIdx--; }
+    const idx = c.projets.findIndex(x => x.id === id);
+    if(idx !== -1) c.projets.splice(idx, 1);
+    if(activeProjectId === id){ activeProjectId = null; }
     renderProjectList(projectSearchEl.value);
     renderProjectDetail();
   }
 
   function renderProjectDetail(){
     const c = clients.find(x => x.id === activeClientId);
-    const p = c && activeProjectIdx !== null ? c.projets[activeProjectIdx] : null;
+    const p = c && activeProjectId !== null ? c.projets.find(x => x.id === activeProjectId) : null;
     if(!p){
       projectDetailBodyEl.innerHTML = `<div class="project-empty">Sélectionnez un projet dans la liste pour afficher ses informations.</div>`;
       return;
@@ -220,7 +239,7 @@
 
   function openConfirmModal(title, message, onConfirm){
     openModal(title, `<p style="margin:0; font-size:13.5px; line-height:1.6; color:var(--ink);">${message}</p>`,
-      () => { onConfirm(); closeModal(); },
+      async () => { await onConfirm(); closeModal(); },
       { submitLabel: 'Supprimer', danger: true });
   }
 
@@ -260,23 +279,26 @@
         <label>Observation</label>
         <textarea id="mObs" placeholder="Notes, préférences, remarques…"></textarea>
       </div>
-    `, () => {
+    `, async () => {
       const nom = document.getElementById('mNom').value.trim();
       const errorEl = document.getElementById('mNomError');
       if(!nom){ errorEl.style.display = 'block'; return; }
       errorEl.style.display = 'none';
-      const newId = clients.length ? Math.max(...clients.map(c => c.id)) + 1 : 1;
-      clients.push({
-        id: newId,
-        nom,
-        responsable: document.getElementById('mResponsable').value.trim(),
-        tel: document.getElementById('mTel').value.trim(),
-        quartier: document.getElementById('mQuartier').value.trim(),
-        obs: document.getElementById('mObs').value.trim(),
-        projets: [],
-      });
-      selectClient(newId);
-      closeModal();
+      try {
+        const created = await invoke('create_client', { client: {
+          nom,
+          responsable: document.getElementById('mResponsable').value.trim(),
+          telephone: document.getElementById('mTel').value.trim(),
+          quartier: document.getElementById('mQuartier').value.trim(),
+          observation: document.getElementById('mObs').value.trim(),
+        }});
+        clients.push(clientFromRow(created, []));
+        selectClient(created.id);
+        closeModal();
+      } catch(err) {
+        errorEl.textContent = String(err);
+        errorEl.style.display = 'block';
+      }
     });
   });
 
@@ -334,7 +356,7 @@
         <label>Reste à payer (Ar)</label>
         <input type="number" id="mSolde" placeholder="0" min="0">
       </div>
-    `, () => {
+    `, async () => {
       const titre = document.getElementById('mTitre').value.trim();
       const errorEl = document.getElementById('mTitreError');
       if(!titre){ errorEl.style.display = 'block'; return; }
@@ -342,29 +364,32 @@
 
       const genre = document.getElementById('mGenre').value.trim();
       const statut = document.getElementById('mStatut').value;
-      const creation = isoToFr(document.getElementById('mCreation').value);
-      const livraison = isoToFr(document.getElementById('mLivraison').value);
       const avanceNum = parseFloat(document.getElementById('mAvance').value) || 0;
       const cachetNum = parseFloat(document.getElementById('mCachet').value) || 0;
       const paiement = document.getElementById('mPaiement').value;
-      const soldeNum = parseFloat(document.getElementById('mSolde').value) || 0;
+      const soldeInput = parseFloat(document.getElementById('mSolde').value) || 0;
+      const soldeNum = paiement === 'impaye' ? (soldeInput || Math.max(cachetNum - avanceNum, 0)) : null;
 
-      const project = {
-        titre, genre, statut,
-        avance: formatAr(avanceNum),
-        cachet: formatAr(cachetNum),
-        creation, livraison,
-        paiement,
-      };
-      if(paiement === 'impaye'){
-        project.solde = formatAr(soldeNum || Math.max(cachetNum - avanceNum, 0));
+      try {
+        const created = await invoke('create_projet', { projet: {
+          clientId: c.id,
+          titre, genre, statut,
+          dateCreation: document.getElementById('mCreation').value || null,
+          dateLivraison: document.getElementById('mLivraison').value || null,
+          avance: avanceNum,
+          cachet: cachetNum,
+          statutPaiement: paiement,
+          solde: soldeNum,
+        }});
+        c.projets.push(projetFromRow(created));
+        activeProjectId = created.id;
+        renderProjectList(projectSearchEl.value);
+        renderProjectDetail();
+        closeModal();
+      } catch(err) {
+        errorEl.textContent = String(err);
+        errorEl.style.display = 'block';
       }
-
-      c.projets.push(project);
-      activeProjectIdx = c.projets.length - 1;
-      renderProjectList(projectSearchEl.value);
-      renderProjectDetail();
-      closeModal();
     });
 
     // toggle solde field visibility based on paiement selection
@@ -402,26 +427,41 @@
         <label>Observation</label>
         <textarea id="mObs">${c.obs}</textarea>
       </div>
-    `, () => {
+    `, async () => {
       const nom = document.getElementById('mNom').value.trim();
       const errorEl = document.getElementById('mNomError');
       if(!nom){ errorEl.style.display = 'block'; return; }
       errorEl.style.display = 'none';
-      c.nom = nom;
-      c.responsable = document.getElementById('mResponsable').value.trim();
-      c.tel = document.getElementById('mTel').value.trim();
-      c.quartier = document.getElementById('mQuartier').value.trim();
-      c.obs = document.getElementById('mObs').value.trim();
-      renderClientList(clientSearchEl.value);
-      renderClientDetail();
-      closeModal();
+
+      const payload = {
+        id: c.id,
+        nom,
+        responsable: document.getElementById('mResponsable').value.trim(),
+        telephone: document.getElementById('mTel').value.trim(),
+        quartier: document.getElementById('mQuartier').value.trim(),
+        observation: document.getElementById('mObs').value.trim(),
+      };
+      try {
+        await invoke('update_client', { client: payload });
+        c.nom = payload.nom;
+        c.responsable = payload.responsable;
+        c.tel = payload.telephone;
+        c.quartier = payload.quartier;
+        c.obs = payload.observation;
+        renderClientList(clientSearchEl.value);
+        renderClientDetail();
+        closeModal();
+      } catch(err) {
+        errorEl.textContent = String(err);
+        errorEl.style.display = 'block';
+      }
     });
   });
 
   // ---- Modifier le projet sélectionné ----
   document.getElementById('editProjectBtn').addEventListener('click', () => {
     const c = clients.find(x => x.id === activeClientId);
-    const p = c && activeProjectIdx !== null ? c.projets[activeProjectIdx] : null;
+    const p = c && activeProjectId !== null ? c.projets.find(x => x.id === activeProjectId) : null;
     if(!p){ alert("Sélectionnez d'abord un projet à modifier."); return; }
 
     openModal(`Modifier — ${p.titre}`, `
@@ -473,7 +513,7 @@
         <label>Reste à payer (Ar)</label>
         <input type="number" id="mSolde" value="${parseAr(p.solde || 0)}" min="0">
       </div>
-    `, () => {
+    `, async () => {
       const titre = document.getElementById('mTitre').value.trim();
       const errorEl = document.getElementById('mTitreError');
       if(!titre){ errorEl.style.display = 'block'; return; }
@@ -482,25 +522,45 @@
       const avanceNum = parseFloat(document.getElementById('mAvance').value) || 0;
       const cachetNum = parseFloat(document.getElementById('mCachet').value) || 0;
       const paiement = document.getElementById('mPaiement').value;
-      const soldeNum = parseFloat(document.getElementById('mSolde').value) || 0;
+      const soldeInput = parseFloat(document.getElementById('mSolde').value) || 0;
+      const soldeNum = paiement === 'impaye' ? (soldeInput || Math.max(cachetNum - avanceNum, 0)) : null;
 
-      p.titre = titre;
-      p.genre = document.getElementById('mGenre').value.trim();
-      p.statut = document.getElementById('mStatut').value;
-      p.creation = isoToFr(document.getElementById('mCreation').value);
-      p.livraison = isoToFr(document.getElementById('mLivraison').value);
-      p.avance = formatAr(avanceNum);
-      p.cachet = formatAr(cachetNum);
-      p.paiement = paiement;
-      if(paiement === 'impaye'){
-        p.solde = formatAr(soldeNum || Math.max(cachetNum - avanceNum, 0));
-      } else {
-        delete p.solde;
+      const payload = {
+        id: p.id,
+        clientId: c.id,
+        titre,
+        genre: document.getElementById('mGenre').value.trim(),
+        statut: document.getElementById('mStatut').value,
+        dateCreation: document.getElementById('mCreation').value || null,
+        dateLivraison: document.getElementById('mLivraison').value || null,
+        avance: avanceNum,
+        cachet: cachetNum,
+        statutPaiement: paiement,
+        solde: soldeNum,
+      };
+
+      try {
+        await invoke('update_projet', { projet: payload });
+        p.titre = payload.titre;
+        p.genre = payload.genre;
+        p.statut = payload.statut;
+        p.creation = isoToFr(payload.dateCreation);
+        p.livraison = payload.dateLivraison ? isoToFr(payload.dateLivraison) : '—';
+        p.avance = formatAr(payload.avance);
+        p.cachet = formatAr(payload.cachet);
+        p.paiement = payload.statutPaiement;
+        if(payload.statutPaiement === 'impaye'){
+          p.solde = formatAr(payload.solde);
+        } else {
+          delete p.solde;
+        }
+        renderProjectList(projectSearchEl.value);
+        renderProjectDetail();
+        closeModal();
+      } catch(err) {
+        errorEl.textContent = String(err);
+        errorEl.style.display = 'block';
       }
-
-      renderProjectList(projectSearchEl.value);
-      renderProjectDetail();
-      closeModal();
     });
 
     const paiementSel = document.getElementById('mPaiement');
@@ -685,10 +745,6 @@
   }
   tick();
   setInterval(tick, 1000);
-
-  // init
-  renderClientList();
-  selectClient(clients[0].id);
 
   // ==================== T.D.B DASHBOARD ====================
   function allProjets(){
@@ -918,14 +974,11 @@
     renderRevenueChart();
   }
 
-  // render TDB immediately since it's the default active tab
-  renderTDB();
-
   // ==================== FILTRE (RECHERCHE CROISÉE) ====================
   function allProjetsFull(){
     const out = [];
     clients.forEach(c => {
-      c.projets.forEach((p, idx) => {
+      c.projets.forEach(p => {
         const cachetNum = parseAr(p.cachet);
         const avanceNum = parseAr(p.avance);
         const resteNum = p.paiement === 'paye' ? 0 : (p.solde ? parseAr(p.solde) : Math.max(cachetNum - avanceNum, 0));
@@ -935,7 +988,6 @@
           clientNom: c.nom,
           clientTel: c.tel,
           clientQuartier: c.quartier.split(',')[0].trim(),
-          projectIdx: idx,
           avanceNum, resteNum,
         });
       });
@@ -1030,13 +1082,13 @@
     renderFiltre();
   }
 
-  function jumpToProject(clientId, idx){
+  function jumpToProject(clientId, projetId){
     document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
     document.querySelector('.nav-tab[data-tab="client"]').classList.add('active');
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     document.getElementById('view-client').classList.add('active');
     selectClient(clientId);
-    activeProjectIdx = idx;
+    activeProjectId = projetId;
     renderProjectList(projectSearchEl.value);
     renderProjectDetail();
   }
@@ -1066,7 +1118,7 @@
     }
 
     listEl.innerHTML = results.map(p => `
-      <div class="result-card" data-client="${p.clientId}" data-idx="${p.projectIdx}">
+      <div class="result-card" data-client="${p.clientId}" data-pid="${p.id}">
         <div class="rc-top">
           <div class="rc-client-block">
             <div class="rc-client">${p.clientNom}</div>
@@ -1090,7 +1142,7 @@
 
     listEl.querySelectorAll('.result-card').forEach(card => {
       card.addEventListener('click', () => {
-        jumpToProject(parseInt(card.dataset.client, 10), parseInt(card.dataset.idx, 10));
+        jumpToProject(parseInt(card.dataset.client, 10), parseInt(card.dataset.pid, 10));
       });
     });
   }
@@ -1105,4 +1157,13 @@
     renderFiltre();
   });
 
-  renderFiltre();
+  // ==================== INIT ====================
+  async function init(){
+    clients = await loadClients();
+    renderClientList();
+    if(clients.length){ selectClient(clients[0].id); }
+    else { renderClientDetail(); renderProjectDetail(); }
+    renderTDB();
+    renderFiltre();
+  }
+  init();
