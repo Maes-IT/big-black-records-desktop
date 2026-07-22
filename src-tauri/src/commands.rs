@@ -1,8 +1,8 @@
-use rusqlite::{params, Row};
+use rusqlite::{named_params, params, Row};
 use tauri::State;
 
 use crate::db::DbState;
-use crate::models::{Client, NewClient, NewProjet, Projet};
+use crate::models::{Client, FiltreCriteria, FiltreResult, NewClient, NewProjet, Projet};
 
 fn row_to_client(row: &Row) -> rusqlite::Result<Client> {
     Ok(Client {
@@ -195,4 +195,74 @@ pub fn delete_projet(state: State<DbState>, id: i64) -> Result<(), String> {
     conn.execute("DELETE FROM projets WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn row_to_filtre_result(row: &Row) -> rusqlite::Result<FiltreResult> {
+    Ok(FiltreResult {
+        id: row.get(0)?,
+        client_id: row.get(1)?,
+        client_nom: row.get(2)?,
+        client_telephone: row.get(3)?,
+        client_quartier: row.get(4)?,
+        titre: row.get(5)?,
+        genre: row.get(6)?,
+        statut: row.get(7)?,
+        date_creation: row.get(8)?,
+        date_livraison: row.get(9)?,
+        avance: row.get(10)?,
+        cachet: row.get(11)?,
+        statut_paiement: row.get(12)?,
+        solde: row.get(13)?,
+        reste: row.get(14)?,
+    })
+}
+
+const FILTER_SQL: &str = "
+    SELECT id, client_id, client_nom, client_telephone, client_quartier, titre, genre, statut,
+           date_creation, date_livraison, avance, cachet, statut_paiement, solde, reste
+    FROM projets_view
+    WHERE (:nom_groupe IS NULL OR client_nom LIKE '%' || :nom_groupe || '%')
+      AND (:nom_projet IS NULL OR titre LIKE '%' || :nom_projet || '%')
+      AND (:telephone IS NULL OR REPLACE(client_telephone, ' ', '') LIKE '%' || REPLACE(:telephone, ' ', '') || '%')
+      AND (:quartier IS NULL OR client_quartier = :quartier OR client_quartier LIKE :quartier || ',%')
+      AND (:etat IS NULL OR statut = :etat)
+      AND (:creation_from IS NULL OR date_creation >= :creation_from)
+      AND (:creation_to IS NULL OR date_creation <= :creation_to)
+      AND (:livraison_from IS NULL OR date_livraison >= :livraison_from)
+      AND (:livraison_to IS NULL OR date_livraison <= :livraison_to)
+      AND (:avance_min IS NULL OR avance >= :avance_min)
+      AND (:avance_max IS NULL OR avance <= :avance_max)
+      AND (:reste_min IS NULL OR reste >= :reste_min)
+      AND (:reste_max IS NULL OR reste <= :reste_max)
+    ORDER BY id
+";
+
+#[tauri::command]
+pub fn filter_projets(
+    state: State<DbState>,
+    criteria: FiltreCriteria,
+) -> Result<Vec<FiltreResult>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(FILTER_SQL).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(
+            named_params! {
+                ":nom_groupe": criteria.nom_groupe,
+                ":nom_projet": criteria.nom_projet,
+                ":telephone": criteria.telephone,
+                ":quartier": criteria.quartier,
+                ":etat": criteria.etat,
+                ":creation_from": criteria.creation_from,
+                ":creation_to": criteria.creation_to,
+                ":livraison_from": criteria.livraison_from,
+                ":livraison_to": criteria.livraison_to,
+                ":avance_min": criteria.avance_min,
+                ":avance_max": criteria.avance_max,
+                ":reste_min": criteria.reste_min,
+                ":reste_max": criteria.reste_max,
+            },
+            row_to_filtre_result,
+        )
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
 }

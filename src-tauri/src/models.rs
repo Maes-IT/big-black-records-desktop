@@ -51,3 +51,41 @@ pub struct NewProjet {
     pub statut_paiement: String,
     pub solde: Option<i64>,
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiltreCriteria {
+    pub nom_groupe: Option<String>,
+    pub nom_projet: Option<String>,
+    pub telephone: Option<String>,
+    pub quartier: Option<String>,
+    pub etat: Option<String>,
+    pub creation_from: Option<String>,
+    pub creation_to: Option<String>,
+    pub livraison_from: Option<String>,
+    pub livraison_to: Option<String>,
+    pub avance_min: Option<f64>,
+    pub avance_max: Option<f64>,
+    pub reste_min: Option<f64>,
+    pub reste_max: Option<f64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiltreResult {
+    pub id: i64,
+    pub client_id: i64,
+    pub client_nom: String,
+    pub client_telephone: String,
+    pub client_quartier: String,
+    pub titre: String,
+    pub genre: String,
+    pub statut: String,
+    pub date_creation: Option<String>,
+    pub date_livraison: Option<String>,
+    pub avance: i64,
+    pub cachet: i64,
+    pub statut_paiement: String,
+    pub solde: Option<i64>,
+    pub reste: i64,
+}

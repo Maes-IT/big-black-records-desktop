@@ -975,32 +975,43 @@
   }
 
   // ==================== FILTRE (RECHERCHE CROISÉE) ====================
-  function allProjetsFull(){
-    const out = [];
-    clients.forEach(c => {
-      c.projets.forEach(p => {
-        const cachetNum = parseAr(p.cachet);
-        const avanceNum = parseAr(p.avance);
-        const resteNum = p.paiement === 'paye' ? 0 : (p.solde ? parseAr(p.solde) : Math.max(cachetNum - avanceNum, 0));
-        out.push({
-          ...p,
-          clientId: c.id,
-          clientNom: c.nom,
-          clientTel: c.tel,
-          clientQuartier: c.quartier.split(',')[0].trim(),
-          avanceNum, resteNum,
-        });
-      });
-    });
-    return out;
+  // Adaptateurs: forme historique (f*) <-> forme DB (camelCase) attendue par filter_projets.
+  function toFiltreCriteria(f){
+    const str = v => v === '' ? null : v;
+    const num = v => v === '' ? null : parseFloat(v);
+    return {
+      nomGroupe: str(f.nomGroupe),
+      nomProjet: str(f.nomProjet),
+      telephone: str(f.telephone),
+      quartier: str(f.quartier),
+      etat: str(f.etat),
+      creationFrom: str(f.creationFrom),
+      creationTo: str(f.creationTo),
+      livraisonFrom: str(f.livraisonFrom),
+      livraisonTo: str(f.livraisonTo),
+      avanceMin: num(f.avanceMin),
+      avanceMax: num(f.avanceMax),
+      resteMin: num(f.resteMin),
+      resteMax: num(f.resteMax),
+    };
   }
 
-  function parseFrDate(str){
-    if(!str || str === '—') return null;
-    const parts = str.split('/').map(Number);
-    if(parts.length !== 3 || parts.some(isNaN)) return null;
-    const [d, m, y] = parts;
-    return new Date(y, m - 1, d);
+  function filtreResultFromRow(row){
+    return {
+      id: row.id,
+      clientId: row.clientId,
+      clientNom: row.clientNom,
+      clientTel: row.clientTelephone,
+      clientQuartier: row.clientQuartier.split(',')[0].trim(),
+      titre: row.titre,
+      genre: row.genre,
+      statut: row.statut,
+      avance: formatAr(row.avance),
+      cachet: formatAr(row.cachet),
+      creation: isoToFr(row.dateCreation),
+      livraison: row.dateLivraison ? isoToFr(row.dateLivraison) : '—',
+      resteNum: row.reste,
+    };
   }
 
   function populateQuartierSelect(){
@@ -1029,33 +1040,6 @@
       resteMin: document.getElementById('fResteMin').value,
       resteMax: document.getElementById('fResteMax').value,
     };
-  }
-
-  function matchesFiltre(p, f){
-    if(f.nomGroupe && !p.clientNom.toLowerCase().includes(f.nomGroupe.toLowerCase())) return false;
-    if(f.nomProjet && !p.titre.toLowerCase().includes(f.nomProjet.toLowerCase())) return false;
-    if(f.telephone && !p.clientTel.replace(/\s/g, '').includes(f.telephone.replace(/\s/g, ''))) return false;
-    if(f.quartier && p.clientQuartier !== f.quartier) return false;
-    if(f.etat && p.statut !== f.etat) return false;
-
-    if(f.creationFrom || f.creationTo){
-      const d = parseFrDate(p.creation);
-      if(!d) return false;
-      if(f.creationFrom && d < new Date(f.creationFrom)) return false;
-      if(f.creationTo && d > new Date(f.creationTo)) return false;
-    }
-    if(f.livraisonFrom || f.livraisonTo){
-      const d = parseFrDate(p.livraison);
-      if(!d) return false;
-      if(f.livraisonFrom && d < new Date(f.livraisonFrom)) return false;
-      if(f.livraisonTo && d > new Date(f.livraisonTo)) return false;
-    }
-    if(f.avanceMin !== '' && p.avanceNum < parseFloat(f.avanceMin)) return false;
-    if(f.avanceMax !== '' && p.avanceNum > parseFloat(f.avanceMax)) return false;
-    if(f.resteMin !== '' && p.resteNum < parseFloat(f.resteMin)) return false;
-    if(f.resteMax !== '' && p.resteNum > parseFloat(f.resteMax)) return false;
-
-    return true;
   }
 
   function chipDefs(f){
@@ -1093,10 +1077,17 @@
     renderProjectDetail();
   }
 
-  function renderFiltre(){
+  async function renderFiltre(){
     populateQuartierSelect();
     const f = getFiltreState();
-    const results = allProjetsFull().filter(p => matchesFiltre(p, f));
+    let results;
+    try {
+      const rows = await invoke('filter_projets', { criteria: toFiltreCriteria(f) });
+      results = rows.map(filtreResultFromRow);
+    } catch(err) {
+      console.error('filter_projets failed', err);
+      results = [];
+    }
 
     const chips = chipDefs(f);
     const chipsEl = document.getElementById('activeChips');
