@@ -747,37 +747,6 @@
   setInterval(tick, 1000);
 
   // ==================== T.D.B DASHBOARD ====================
-  function allProjets(){
-    const out = [];
-    clients.forEach(c => c.projets.forEach(p => out.push({ ...p, client: c.nom })));
-    return out;
-  }
-
-  function renderQuartier(){
-    const counts = {};
-    clients.forEach(c => {
-      const q = c.quartier.split(',')[0].trim();
-      counts[q] = (counts[q] || 0) + 1;
-    });
-    const listEl = document.getElementById('quartierList');
-    listEl.innerHTML = Object.entries(counts).map(([q, n]) => `
-      <li><span class="qname">${q}</span><span class="qcount">${n}</span></li>
-    `).join('');
-    document.getElementById('quartierTotal').textContent = clients.length;
-  }
-
-  function renderProjetStats(){
-    const projets = allProjets();
-    const enCours = projets.filter(p => p.statut === 'en-cours').length;
-    const pret = projets.filter(p => p.statut === 'attente').length;
-    const livre = projets.filter(p => p.statut === 'termine').length;
-    document.getElementById('projetStats').innerHTML = `
-      <div class="stat"><span class="num">${enCours}</span><span class="lbl">En cours</span></div>
-      <div class="stat"><span class="num">${pret}</span><span class="lbl">Prêt</span></div>
-      <div class="stat"><span class="num">${livre}</span><span class="lbl">Livré</span></div>
-    `;
-  }
-
   function parseAr(str){
     return parseInt(String(str).replace(/[^\d]/g, ''), 10) || 0;
   }
@@ -785,48 +754,49 @@
     return n.toLocaleString('fr-FR') + ' Ar';
   }
 
-  function renderPaiementStats(){
-    const projets = allProjets();
-    const payes = projets.filter(p => p.paiement === 'paye');
-    const impayes = projets.filter(p => p.paiement === 'impaye');
-    const totalPaye = payes.reduce((s, p) => s + parseAr(p.cachet), 0);
-    const totalImpaye = impayes.reduce((s, p) => s + parseAr(p.solde || 0), 0);
-    document.getElementById('paiementStats').innerHTML = `
-      <div class="stat"><span class="num">${payes.length}</span><span class="lbl">Payé</span><span class="sub">${formatAr(totalPaye)}</span></div>
-      <div class="stat"><span class="num">${impayes.length}</span><span class="lbl">Impayé</span><span class="sub">${formatAr(totalImpaye)}</span></div>
+  function renderQuartier(stats){
+    const listEl = document.getElementById('quartierList');
+    listEl.innerHTML = stats.quartiers.map(({quartier, count}) => `
+      <li><span class="qname">${quartier}</span><span class="qcount">${count}</span></li>
+    `).join('');
+    document.getElementById('quartierTotal').textContent = stats.clientsTotal;
+  }
+
+  function renderProjetStats(stats){
+    document.getElementById('projetStats').innerHTML = `
+      <div class="stat"><span class="num">${stats.projetsEnCours}</span><span class="lbl">En cours</span></div>
+      <div class="stat"><span class="num">${stats.projetsAttente}</span><span class="lbl">Prêt</span></div>
+      <div class="stat"><span class="num">${stats.projetsTermine}</span><span class="lbl">Livré</span></div>
     `;
   }
 
-  function renderImpayeList(){
-    const projets = allProjets().filter(p => p.paiement === 'impaye');
+  function renderPaiementStats(stats){
+    document.getElementById('paiementStats').innerHTML = `
+      <div class="stat"><span class="num">${stats.payesCount}</span><span class="lbl">Payé</span><span class="sub">${formatAr(stats.payesTotal)}</span></div>
+      <div class="stat"><span class="num">${stats.impayesCount}</span><span class="lbl">Impayé</span><span class="sub">${formatAr(stats.impayesTotal)}</span></div>
+    `;
+  }
+
+  function renderImpayeList(stats){
     const el = document.getElementById('impayeList');
-    if(projets.length === 0){
+    if(stats.impayes.length === 0){
       el.innerHTML = `<div class="impaye-empty">Aucun projet impayé.</div>`;
       return;
     }
-    el.innerHTML = projets.map(p => `
+    el.innerHTML = stats.impayes.map(p => `
       <li>
         <div>
-          <div class="il-title">${p.client} — ${p.titre}</div>
+          <div class="il-title">${p.clientNom} — ${p.titre}</div>
           <div class="il-genre">${p.genre}</div>
         </div>
-        <div class="il-amount">${p.solde}</div>
+        <div class="il-amount">${formatAr(p.solde)}</div>
       </li>
     `).join('');
   }
 
-  // ---- Charts: seeded pseudo-random monthly data per year ----
+  // ---- Charts: agrégations mensuelles réelles via get_chart_data ----
   const MONTHS = ['J','F','M','A','M','J','J','A','S','O','N','D'];
   const YEARS = [2026, 2027, 2028, 2029];
-
-  function seededSeries(year, base, spread){
-    let seed = year * 97;
-    const rnd = () => {
-      seed = (seed * 9301 + 49297) % 233280;
-      return seed / 233280;
-    };
-    return MONTHS.map((_, i) => Math.round(base + rnd() * spread + i * (spread / 24)));
-  }
 
   const chartTheme = {
     ink: '#ece2c8',
@@ -909,25 +879,28 @@
     return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:100%;">${grid}<path d="${areaPath}" fill="rgba(201,161,58,0.14)" stroke="none"/><path d="${linePath}" fill="none" stroke="var(--gold)" stroke-width="2"/>${dots}${labels}</svg>`;
   }
 
-  function renderSalesChart(){
-    document.getElementById('salesChart').innerHTML = buildBarChartSVG(seededSeries(salesYear, 20, 60));
+  async function renderSalesChart(){
+    const values = await invoke('get_chart_data', { annee: salesYear, kind: 'ventes' });
+    document.getElementById('salesChart').innerHTML = buildBarChartSVG(values);
   }
-  function renderRevenueChart(){
-    document.getElementById('revenueChart').innerHTML = buildLineChartSVG(seededSeries(revenueYear, 40000, 140000));
+  async function renderRevenueChart(){
+    const values = await invoke('get_chart_data', { annee: revenueYear, kind: 'ca' });
+    document.getElementById('revenueChart').innerHTML = buildLineChartSVG(values);
   }
 
   // ---- Comparaison des dettes (balance) ----
-  const dettesData = {
-    mois:   { aLabel:'Mois -1', bLabel:'Mois',  a: 8, b: 3 },
-    semaine:{ aLabel:'Sem. -1', bLabel:'Sem.',  a: 5, b: 4 },
-    an:     { aLabel:'An -1',   bLabel:'An',    a: 12, b: 9 },
+  const periodeLabels = {
+    mois:   { aLabel:'Mois -1', bLabel:'Mois' },
+    semaine:{ aLabel:'Sem. -1', bLabel:'Sem.' },
+    an:     { aLabel:'An -1',   bLabel:'An' },
   };
   let activePeriode = 'mois';
 
-  function renderScale(){
-    const d = dettesData[activePeriode];
-    const max = Math.max(d.a, d.b, 1);
-    const tilt = ((d.b - d.a) / max) * 12; // degrees — heavier side (a or b) tilts down
+  async function renderScale(){
+    const { a, b } = await invoke('get_dettes_comparaison', { periode: activePeriode });
+    const label = periodeLabels[activePeriode];
+    const max = Math.max(a, b, 1);
+    const tilt = ((b - a) / max) * 12; // degrees — heavier side (a ou b) tilts down
     const wrap = document.getElementById('scaleWrap');
     wrap.innerHTML = `
       <svg viewBox="0 0 260 160" width="100%" height="150" style="max-width:260px;">
@@ -941,10 +914,10 @@
           <path d="M180,62 Q205,90 230,62 Z" fill="none" stroke="var(--gold)" stroke-width="2.5"/>
         </g>
         <circle cx="130" cy="28" r="6" fill="var(--gold)"/>
-        <text x="55" y="115" text-anchor="middle" fill="${chartTheme.ink}" font-family="'IBM Plex Mono', monospace" font-size="18" font-weight="600">${d.a}</text>
-        <text x="55" y="132" text-anchor="middle" fill="${chartTheme.dim}" font-family="'IBM Plex Mono', monospace" font-size="10">${d.aLabel}</text>
-        <text x="205" y="115" text-anchor="middle" fill="${chartTheme.ink}" font-family="'IBM Plex Mono', monospace" font-size="18" font-weight="600">${d.b}</text>
-        <text x="205" y="132" text-anchor="middle" fill="${chartTheme.dim}" font-family="'IBM Plex Mono', monospace" font-size="10">${d.bLabel}</text>
+        <text x="55" y="115" text-anchor="middle" fill="${chartTheme.ink}" font-family="'IBM Plex Mono', monospace" font-size="18" font-weight="600">${a}</text>
+        <text x="55" y="132" text-anchor="middle" fill="${chartTheme.dim}" font-family="'IBM Plex Mono', monospace" font-size="10">${label.aLabel}</text>
+        <text x="205" y="115" text-anchor="middle" fill="${chartTheme.ink}" font-family="'IBM Plex Mono', monospace" font-size="18" font-weight="600">${b}</text>
+        <text x="205" y="132" text-anchor="middle" fill="${chartTheme.dim}" font-family="'IBM Plex Mono', monospace" font-size="10">${label.bLabel}</text>
       </svg>
     `;
   }
@@ -959,11 +932,19 @@
   });
 
   let tdbInitialized = false;
-  function renderTDB(){
-    renderQuartier();
-    renderProjetStats();
-    renderPaiementStats();
-    renderImpayeList();
+  async function renderTDB(){
+    let stats;
+    try {
+      stats = await invoke('get_dashboard_stats');
+    } catch(err) {
+      console.error('get_dashboard_stats failed', err);
+      stats = { quartiers: [], clientsTotal: 0, projetsEnCours: 0, projetsAttente: 0, projetsTermine: 0,
+        payesCount: 0, payesTotal: 0, impayesCount: 0, impayesTotal: 0, impayes: [] };
+    }
+    renderQuartier(stats);
+    renderProjetStats(stats);
+    renderPaiementStats(stats);
+    renderImpayeList(stats);
     renderScale();
     if(!tdbInitialized){
       buildYearTabs(document.querySelector('.year-tabs[data-chart="sales"]'), 'sales');

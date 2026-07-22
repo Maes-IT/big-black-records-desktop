@@ -89,3 +89,41 @@ pub struct FiltreResult {
     pub solde: Option<i64>,
     pub reste: i64,
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuartierCount {
+    pub quartier: String,
+    pub count: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImpayeItem {
+    pub client_nom: String,
+    pub titre: String,
+    pub genre: String,
+    pub solde: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardStats {
+    pub quartiers: Vec<QuartierCount>,
+    pub clients_total: i64,
+    pub projets_en_cours: i64,
+    pub projets_attente: i64,
+    pub projets_termine: i64,
+    pub payes_count: i64,
+    pub payes_total: i64,
+    pub impayes_count: i64,
+    pub impayes_total: i64,
+    pub impayes: Vec<ImpayeItem>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DettesComparaison {
+    pub a: i64,
+    pub b: i64,
+}

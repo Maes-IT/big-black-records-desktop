@@ -1,8 +1,12 @@
 use rusqlite::{named_params, params, Row};
+use std::collections::HashMap;
 use tauri::State;
 
 use crate::db::DbState;
-use crate::models::{Client, FiltreCriteria, FiltreResult, NewClient, NewProjet, Projet};
+use crate::models::{
+    Client, DashboardStats, DettesComparaison, FiltreCriteria, FiltreResult, ImpayeItem,
+    NewClient, NewProjet, Projet, QuartierCount,
+};
 
 fn row_to_client(row: &Row) -> rusqlite::Result<Client> {
     Ok(Client {
@@ -265,4 +269,164 @@ pub fn filter_projets(
         )
         .map_err(|e| e.to_string())?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_dashboard_stats(state: State<DbState>) -> Result<DashboardStats, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+
+    let clients_total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM clients", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+
+    let quartier_values: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT quartier FROM clients")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+    };
+    let mut counts: HashMap<String, i64> = HashMap::new();
+    for q in quartier_values {
+        let key = q.split(',').next().unwrap_or("").trim().to_string();
+        *counts.entry(key).or_insert(0) += 1;
+    }
+    let mut quartiers: Vec<QuartierCount> = counts
+        .into_iter()
+        .map(|(quartier, count)| QuartierCount { quartier, count })
+        .collect();
+    quartiers.sort_by(|a, b| a.quartier.cmp(&b.quartier));
+
+    let (projets_en_cours, projets_attente, projets_termine): (i64, i64, i64) = conn
+        .query_row(
+            "SELECT
+                COALESCE(SUM(CASE WHEN statut='en-cours' THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN statut='attente' THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN statut='termine' THEN 1 ELSE 0 END),0)
+             FROM projets",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let (payes_count, payes_total, impayes_count, impayes_total): (i64, i64, i64, i64) = conn
+        .query_row(
+            "SELECT
+                COALESCE(SUM(CASE WHEN statut_paiement='paye' THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN statut_paiement='paye' THEN cachet ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN statut_paiement='impaye' THEN 1 ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN statut_paiement='impaye' THEN solde ELSE 0 END),0)
+             FROM projets",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let impayes: Vec<ImpayeItem> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT client_nom, titre, genre, solde FROM projets_view
+                 WHERE statut_paiement = 'impaye' ORDER BY id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(ImpayeItem {
+                    client_nom: r.get(0)?,
+                    titre: r.get(1)?,
+                    genre: r.get(2)?,
+                    solde: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+    };
+
+    Ok(DashboardStats {
+        quartiers,
+        clients_total,
+        projets_en_cours,
+        projets_attente,
+        projets_termine,
+        payes_count,
+        payes_total,
+        impayes_count,
+        impayes_total,
+        impayes,
+    })
+}
+
+#[tauri::command]
+pub fn get_chart_data(state: State<DbState>, annee: i64, kind: String) -> Result<Vec<i64>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let sql = match kind.as_str() {
+        "ventes" => {
+            "SELECT strftime('%m', date_creation) AS mois, COUNT(*)
+             FROM projets WHERE strftime('%Y', date_creation) = ?1 GROUP BY mois"
+        }
+        "ca" => {
+            "SELECT strftime('%m', date_creation) AS mois, COALESCE(SUM(cachet),0)
+             FROM projets WHERE strftime('%Y', date_creation) = ?1 GROUP BY mois"
+        }
+        _ => return Err(format!("kind invalide: {kind} (attendu 'ventes' ou 'ca')")),
+    };
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let mut values = [0i64; 12];
+    let rows = stmt
+        .query_map(params![annee.to_string()], |row| {
+            let mois: String = row.get(0)?;
+            let val: i64 = row.get(1)?;
+            Ok((mois, val))
+        })
+        .map_err(|e| e.to_string())?;
+    for r in rows {
+        let (mois, val) = r.map_err(|e| e.to_string())?;
+        if let Ok(idx) = mois.parse::<usize>() {
+            if (1..=12).contains(&idx) {
+                values[idx - 1] = val;
+            }
+        }
+    }
+    Ok(values.to_vec())
+}
+
+// Hypothèse (voir Phase 0 du plan) : la comparaison des dettes se base sur date_creation,
+// période courante vs période précédente. "semaine" utilise une fenêtre glissante de 7 jours
+// (pas une semaine calendaire ISO) pour rester simple.
+#[tauri::command]
+pub fn get_dettes_comparaison(
+    state: State<DbState>,
+    periode: String,
+) -> Result<DettesComparaison, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let (current_sql, previous_sql): (&str, &str) = match periode.as_str() {
+        "mois" => (
+            "SELECT COALESCE(SUM(reste),0) FROM projets_view
+             WHERE strftime('%Y-%m', date_creation) = strftime('%Y-%m','now')",
+            "SELECT COALESCE(SUM(reste),0) FROM projets_view
+             WHERE strftime('%Y-%m', date_creation) = strftime('%Y-%m','now','-1 month')",
+        ),
+        "semaine" => (
+            "SELECT COALESCE(SUM(reste),0) FROM projets_view
+             WHERE date_creation >= date('now','-6 days') AND date_creation <= date('now')",
+            "SELECT COALESCE(SUM(reste),0) FROM projets_view
+             WHERE date_creation >= date('now','-13 days') AND date_creation <= date('now','-7 days')",
+        ),
+        "an" => (
+            "SELECT COALESCE(SUM(reste),0) FROM projets_view
+             WHERE strftime('%Y', date_creation) = strftime('%Y','now')",
+            "SELECT COALESCE(SUM(reste),0) FROM projets_view
+             WHERE strftime('%Y', date_creation) = strftime('%Y','now','-1 year')",
+        ),
+        _ => return Err(format!("periode invalide: {periode} (attendu 'mois', 'semaine' ou 'an')")),
+    };
+    let current: i64 = conn
+        .query_row(current_sql, [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let previous: i64 = conn
+        .query_row(previous_sql, [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    Ok(DettesComparaison { a: previous, b: current })
 }
