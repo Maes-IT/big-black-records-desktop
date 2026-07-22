@@ -4,9 +4,16 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "postinstall": "node scripts/copy-vendor.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
+  },
+  "dependencies": {
+    "@tauri-apps/plugin-dialog": "^2.7.2",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
+    "xlsx": "^0.18.5"
   }
 }

@@ -10,6 +10,7 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             let conn = db::init_db(&app_data_dir);
@@ -30,6 +31,7 @@ pub fn run() {
             commands::get_dashboard_stats,
             commands::get_chart_data,
             commands::get_dettes_comparaison,
+            commands::save_binary_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

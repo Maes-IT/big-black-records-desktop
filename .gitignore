@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Régénéré depuis node_modules par scripts/copy-vendor.mjs (voir npm postinstall)
+src/vendor/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -571,9 +571,15 @@
   });
 
   // ==================== EXPORT (PDF / XLSX) ====================
-  // TODO Phase 8: réinstaller jspdf / jspdf-autotable / xlsx via npm et réactiver l'export.
-  if(window.jspdf && window.applyPlugin){
-    try { window.applyPlugin(window.jspdf.jsPDF); } catch(e) { console.error('AutoTable init failed', e); }
+  try { window.applyPlugin(window.jspdf.jsPDF); } catch(e) { console.error('AutoTable init failed', e); }
+
+  async function pickSavePath(defaultName, filterName, extensions){
+    return await invoke('plugin:dialog|save', {
+      options: {
+        defaultPath: defaultName,
+        filters: [{ name: filterName, extensions }],
+      },
+    });
   }
 
   function currentClient(){
@@ -604,10 +610,9 @@
   }
 
   // ---- Export XLSX ----
-  function exportClientXLSX(){
+  async function exportClientXLSX(){
     const c = currentClient();
     if(!c){ alert("Sélectionnez d'abord un client à exporter."); return; }
-    if(typeof XLSX === 'undefined'){ alert("Export XLSX indisponible pour le moment (voir Phase 8)."); return; }
 
     const wb = XLSX.utils.book_new();
 
@@ -636,14 +641,20 @@
     }
     XLSX.utils.book_append_sheet(wb, wsProjets, 'Projets');
 
-    XLSX.writeFile(wb, `${safeFileName(c.nom)}_fiche.xlsx`);
+    const path = await pickSavePath(`${safeFileName(c.nom)}_fiche.xlsx`, 'Excel', ['xlsx']);
+    if(!path) return; // annulé par l'utilisateur
+    const bytes = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    try {
+      await invoke('save_binary_file', { path, data: Array.from(bytes) });
+    } catch(err) {
+      alert("Échec de l'export XLSX : " + String(err));
+    }
   }
 
   // ---- Export PDF ----
-  function exportClientPDF(){
+  async function exportClientPDF(){
     const c = currentClient();
     if(!c){ alert("Sélectionnez d'abord un client à exporter."); return; }
-    if(typeof window.jspdf === 'undefined'){ alert("Export PDF indisponible pour le moment (voir Phase 8)."); return; }
 
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ unit: 'pt', format: 'a4' });
@@ -720,7 +731,14 @@
       });
     }
 
-    doc.save(`${safeFileName(c.nom)}_fiche.pdf`);
+    const path = await pickSavePath(`${safeFileName(c.nom)}_fiche.pdf`, 'PDF', ['pdf']);
+    if(!path) return; // annulé par l'utilisateur
+    const bytes = Array.from(new Uint8Array(doc.output('arraybuffer')));
+    try {
+      await invoke('save_binary_file', { path, data: bytes });
+    } catch(err) {
+      alert("Échec de l'export PDF : " + String(err));
+    }
   }
 
   document.getElementById('exportPdfBtn').addEventListener('click', exportClientPDF);

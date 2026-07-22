@@ -430,3 +430,8 @@ pub fn get_dettes_comparaison(
         .map_err(|e| e.to_string())?;
     Ok(DettesComparaison { a: previous, b: current })
 }
+
+#[tauri::command]
+pub fn save_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    std::fs::write(&path, data).map_err(|e| e.to_string())
+}
