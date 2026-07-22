@@ -1,5 +1,15 @@
   const { invoke } = window.__TAURI__.core;
 
+  // ---------- Notification globale (erreurs hors modale) ----------
+  const globalErrorEl = document.getElementById('globalError');
+  let globalErrorTimer = null;
+  function showGlobalError(message){
+    globalErrorEl.textContent = message;
+    globalErrorEl.classList.add('active');
+    clearTimeout(globalErrorTimer);
+    globalErrorTimer = setTimeout(() => globalErrorEl.classList.remove('active'), 6000);
+  }
+
   const TRASH_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
 
   // ---------- Adaptateurs DB (SQLite via invoke) -> forme historique du prototype ----------
@@ -898,12 +908,22 @@
   }
 
   async function renderSalesChart(){
-    const values = await invoke('get_chart_data', { annee: salesYear, kind: 'ventes' });
-    document.getElementById('salesChart').innerHTML = buildBarChartSVG(values);
+    try {
+      const values = await invoke('get_chart_data', { annee: salesYear, kind: 'ventes' });
+      document.getElementById('salesChart').innerHTML = buildBarChartSVG(values);
+    } catch(err) {
+      console.error('get_chart_data(ventes) failed', err);
+      showGlobalError("Impossible de charger le graphique des ventes.");
+    }
   }
   async function renderRevenueChart(){
-    const values = await invoke('get_chart_data', { annee: revenueYear, kind: 'ca' });
-    document.getElementById('revenueChart').innerHTML = buildLineChartSVG(values);
+    try {
+      const values = await invoke('get_chart_data', { annee: revenueYear, kind: 'ca' });
+      document.getElementById('revenueChart').innerHTML = buildLineChartSVG(values);
+    } catch(err) {
+      console.error('get_chart_data(ca) failed', err);
+      showGlobalError("Impossible de charger le graphique du chiffre d'affaires.");
+    }
   }
 
   // ---- Comparaison des dettes (balance) ----
@@ -915,7 +935,14 @@
   let activePeriode = 'mois';
 
   async function renderScale(){
-    const { a, b } = await invoke('get_dettes_comparaison', { periode: activePeriode });
+    let a, b;
+    try {
+      ({ a, b } = await invoke('get_dettes_comparaison', { periode: activePeriode }));
+    } catch(err) {
+      console.error('get_dettes_comparaison failed', err);
+      showGlobalError("Impossible de charger la comparaison des dettes.");
+      return;
+    }
     const label = periodeLabels[activePeriode];
     const max = Math.max(a, b, 1);
     const tilt = ((b - a) / max) * 12; // degrees — heavier side (a ou b) tilts down
@@ -956,6 +983,7 @@
       stats = await invoke('get_dashboard_stats');
     } catch(err) {
       console.error('get_dashboard_stats failed', err);
+      showGlobalError("Impossible de charger les statistiques du tableau de bord.");
       stats = { quartiers: [], clientsTotal: 0, projetsEnCours: 0, projetsAttente: 0, projetsTermine: 0,
         payesCount: 0, payesTotal: 0, impayesCount: 0, impayesTotal: 0, impayes: [] };
     }
@@ -1085,6 +1113,7 @@
       results = rows.map(filtreResultFromRow);
     } catch(err) {
       console.error('filter_projets failed', err);
+      showGlobalError("Impossible d'exécuter la recherche croisée.");
       results = [];
     }
 
@@ -1149,7 +1178,13 @@
 
   // ==================== INIT ====================
   async function init(){
-    clients = await loadClients();
+    try {
+      clients = await loadClients();
+    } catch(err) {
+      console.error('loadClients failed', err);
+      showGlobalError("Impossible de charger les données depuis la base. Réessayez ou redémarrez l'application.");
+      clients = [];
+    }
     renderClientList();
     if(clients.length){ selectClient(clients[0].id); }
     else { renderClientDetail(); renderProjectDetail(); }

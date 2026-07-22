@@ -798,3 +798,26 @@
     color:#f5e9e3;
   }
   .btn-primary.btn-danger:hover{ filter:brightness(1.1); }
+
+  /* ---------- NOTIFICATION GLOBALE ---------- */
+  .global-error{
+    position:fixed;
+    top:16px; left:50%;
+    transform:translateX(-50%) translateY(-12px);
+    z-index:300;
+    max-width:520px;
+    padding:12px 18px;
+    background:linear-gradient(180deg, #2a1712, #1d100c);
+    border:1px solid var(--red);
+    border-radius:var(--radius);
+    color:#f0d8d2;
+    font-size:13px;
+    box-shadow:0 12px 30px rgba(0,0,0,0.45);
+    opacity:0;
+    pointer-events:none;
+    transition:opacity .2s ease, transform .2s ease;
+  }
+  .global-error.active{
+    opacity:1;
+    transform:translateX(-50%) translateY(0);
+  }
