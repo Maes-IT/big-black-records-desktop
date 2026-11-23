@@ -55,3 +55,9 @@ BEGIN UPDATE clients SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE
 
 CREATE TRIGGER IF NOT EXISTS trg_projets_updated_at AFTER UPDATE ON projets
 BEGIN UPDATE projets SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id; END;
+
+-- Réglages clé/valeur (ex. chemins Cubase : modèle .cpr et dossier racine des sessions)
+CREATE TABLE IF NOT EXISTS parametres (
+  cle     TEXT PRIMARY KEY,
+  valeur  TEXT NOT NULL
+);

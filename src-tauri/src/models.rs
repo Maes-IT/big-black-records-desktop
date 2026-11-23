@@ -127,3 +127,15 @@ pub struct DettesComparaison {
     pub a: i64,
     pub b: i64,
 }
+
+/// Résultat de la création combinée client + projet (en une transaction).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientProjetCree {
+    pub client: Client,
+    pub projet: Projet,
+    /// false = projet rattaché à un client déjà existant.
+    pub client_cree: bool,
+    /// true = le titre existait déjà pour ce client, un suffixe « vN » a été ajouté.
+    pub titre_renomme: bool,
+}

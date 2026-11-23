@@ -15,6 +15,9 @@ dist-ssr
 # Régénéré depuis node_modules par scripts/copy-vendor.mjs (voir npm postinstall)
 src/vendor/
 
+# Config Cargo locale (target-dir propre à la machine)
+src-tauri/.cargo/config.toml
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

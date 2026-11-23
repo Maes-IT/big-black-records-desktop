@@ -3,8 +3,9 @@
   // ---------- Notification globale (erreurs hors modale) ----------
   const globalErrorEl = document.getElementById('globalError');
   let globalErrorTimer = null;
-  function showGlobalError(message){
+  function showGlobalError(message, kind = 'error'){
     globalErrorEl.textContent = message;
+    globalErrorEl.classList.toggle('ok', kind === 'ok');
     globalErrorEl.classList.add('active');
     clearTimeout(globalErrorTimer);
     globalErrorTimer = setTimeout(() => globalErrorEl.classList.remove('active'), 6000);
@@ -209,7 +210,14 @@
         <div class="field"><label>Date de création</label><div class="value">${p.creation}</div></div>
         <div class="field"><label>Date de livraison</label><div class="value">${p.livraison}</div></div>
       </div>
+      <div class="project-cubase">
+        <button class="cubase-btn" id="projectCubaseBtn" title="Crée « ${escapeHtml(c.nom)} - ${escapeHtml(p.titre)} » si besoin, puis ouvre le projet dans Cubase">
+          <span class="rec-dot"></span>Ouvrir dans Cubase
+        </button>
+      </div>
     `;
+    document.getElementById('projectCubaseBtn')
+      .addEventListener('click', () => openProjectInCubase(c.nom, p.titre));
   }
 
   clientSearchEl.addEventListener('input', e => renderClientList(e.target.value));
@@ -274,6 +282,12 @@
         <div class="modal-error" id="mNomError" style="display:none;">Le nom du groupe est obligatoire.</div>
       </div>
       <div class="f-group">
+        <label class="f-required">Titre du projet</label>
+        <input type="text" id="mTitreProjet" placeholder="ex. I Love You">
+        <div class="modal-error" id="mTitreProjetError" style="display:none;">Le titre du projet est obligatoire.</div>
+      </div>
+      <div class="cubase-preview" id="mExistingWarn" style="display:none;"></div>
+      <div class="f-group">
         <label>Responsable</label>
         <input type="text" id="mResponsable" placeholder="ex. Rija Andriamora">
       </div>
@@ -289,27 +303,82 @@
         <label>Observation</label>
         <textarea id="mObs" placeholder="Notes, préférences, remarques…"></textarea>
       </div>
-    `, async () => {
-      const nom = document.getElementById('mNom').value.trim();
+    `, submitNewClient);
+
+    // Client + projet minimal créés ensemble (transaction côté Rust), puis session Cubase.
+    // Si le groupe existe déjà : avertissement, et un 2e clic rattache le projet au client existant.
+    const nomEl = document.getElementById('mNom');
+    const titreEl = document.getElementById('mTitreProjet');
+    const warnEl = document.getElementById('mExistingWarn');
+    let rattacherA = null;   // id du client existant confirmé par l'utilisateur
+    let busy = false;
+
+    nomEl.addEventListener('input', () => {
+      if(rattacherA === null) return;
+      rattacherA = null;
+      warnEl.style.display = 'none';
+      modalSubmitBtn.textContent = 'Enregistrer';
+    });
+
+    async function submitNewClient(){
+      if(busy) return;
+      const nom = nomEl.value.trim();
+      const titre = titreEl.value.trim();
       const errorEl = document.getElementById('mNomError');
-      if(!nom){ errorEl.style.display = 'block'; return; }
-      errorEl.style.display = 'none';
+      const titreErrorEl = document.getElementById('mTitreProjetError');
+      errorEl.style.display = nom ? 'none' : 'block';
+      if(!nom) errorEl.textContent = 'Le nom du groupe est obligatoire.';
+      titreErrorEl.style.display = titre ? 'none' : 'block';
+      if(!nom || !titre) return;
+
+      busy = true;
+      modalSubmitBtn.disabled = true;
       try {
-        const created = await invoke('create_client', { client: {
-          nom,
-          responsable: document.getElementById('mResponsable').value.trim(),
-          telephone: document.getElementById('mTel').value.trim(),
-          quartier: document.getElementById('mQuartier').value.trim(),
-          observation: document.getElementById('mObs').value.trim(),
-        }});
-        clients.push(clientFromRow(created, []));
-        selectClient(created.id);
+        if(rattacherA === null){
+          const existing = await invoke('find_client_by_nom', { nom });
+          if(existing){
+            rattacherA = existing.id;
+            warnEl.innerHTML = `<div class="cp-warn" style="margin-top:0;">Le groupe « ${escapeHtml(existing.nom)} » existe déjà.</div>
+              Le projet « ${escapeHtml(titre)} » sera rattaché à ce client existant ; les autres champs saisis ici seront ignorés.`;
+            warnEl.style.display = 'block';
+            modalSubmitBtn.textContent = 'Rattacher le projet';
+            return;
+          }
+        }
+
+        const res = await invoke('create_client_avec_projet', {
+          client: {
+            nom,
+            responsable: document.getElementById('mResponsable').value.trim(),
+            telephone: document.getElementById('mTel').value.trim(),
+            quartier: document.getElementById('mQuartier').value.trim(),
+            observation: document.getElementById('mObs').value.trim(),
+          },
+          titre,
+          rattacherA,
+        });
+
+        const projet = projetFromRow(res.projet);
+        let c = clients.find(x => x.id === res.client.id);
+        if(c) c.projets.push(projet);
+        else clients.push(c = clientFromRow(res.client, [projet]));
+        selectClient(c.id);
+        activeProjectId = projet.id;
+        renderProjectList(projectSearchEl.value);
+        renderProjectDetail();
+        renderTDB();
         closeModal();
+
+        const note = res.titreRenomme ? `Titre déjà utilisé : projet créé sous « ${projet.titre} ». ` : '';
+        openProjectInCubase(c.nom, projet.titre, note);
       } catch(err) {
         errorEl.textContent = String(err);
         errorEl.style.display = 'block';
+      } finally {
+        busy = false;
+        modalSubmitBtn.disabled = false;
       }
-    });
+    }
   });
 
   // ---- Ajouter un projet ----
@@ -1177,6 +1246,225 @@
   });
 
   // ==================== INIT ====================
+  // ==================== SESSION CUBASE ====================
+  // Dossier « ARTISTE - TITRE » + copie du modèle renommée « TITRE.cpr » + ouverture dans Cubase.
+  // Toute la logique fichiers est côté Rust (src-tauri/src/cubase.rs).
+
+  function escapeHtml(s){
+    return String(s ?? '').replace(/[&<>"']/g, ch => (
+      { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]
+    ));
+  }
+
+  async function cubaseIsConfigured(){
+    const s = await invoke('get_cubase_settings');
+    return !!(s.templatePath && s.sessionsRoot);
+  }
+
+  function cubaseSuccessMessage(res){
+    return res.cree
+      ? `Session créée et ouverte dans Cubase : ${res.cheminProjet}`
+      : `Projet existant ouvert dans Cubase : ${res.cheminProjet}`;
+  }
+
+  // ---- Depuis la fiche projet : aucun champ à saisir, crée si absent sinon ouvre l'existant ----
+  async function openProjectInCubase(artiste, titre, note = ''){
+    const btn = document.getElementById('projectCubaseBtn');
+    try {
+      if(!(await cubaseIsConfigured())){
+        openCubaseSettingsModal(() => openProjectInCubase(artiste, titre, note));
+        return;
+      }
+      if(btn) btn.disabled = true;
+      const res = await invoke('create_cubase_session', { artiste, titre, ouvrirSiExiste: true });
+      showGlobalError(note + cubaseSuccessMessage(res), 'ok');
+    } catch(err) {
+      showGlobalError(note + String(err));
+    } finally {
+      if(btn) btn.disabled = false;
+    }
+  }
+
+  // ---- Saisie libre : artiste/groupe + titre ----
+  async function openCubaseSessionModal(prefill = {}){
+    try {
+      if(!(await cubaseIsConfigured())){
+        openCubaseSettingsModal(() => openCubaseSessionModal(prefill));
+        return;
+      }
+    } catch(err) { showGlobalError(String(err)); return; }
+
+    const artistOptions = [...new Set(clients.map(c => c.nom))]
+      .map(n => `<option value="${escapeHtml(n)}"></option>`).join('');
+
+    let preview = null;   // dernier aperçu valide
+    let busy = false;
+    let previewSeq = 0;
+
+    openModal('Nouvelle session Cubase', `
+      <div class="f-group">
+        <label class="f-required">Artiste / Groupe</label>
+        <input type="text" id="cbArtiste" list="cbArtistes" autocomplete="off" placeholder="ex. KST" value="${escapeHtml(prefill.artiste)}">
+        <datalist id="cbArtistes">${artistOptions}</datalist>
+      </div>
+      <div class="f-group">
+        <label class="f-required">Titre du son</label>
+        <input type="text" id="cbTitre" autocomplete="off" placeholder="ex. I Love You" value="${escapeHtml(prefill.titre)}">
+      </div>
+      <div class="cubase-preview" id="cbPreview"></div>
+      <div class="modal-error" id="cbError" style="display:none;"></div>
+    `, submit, { submitLabel: 'Créer et ouvrir' });
+
+    const artisteEl = document.getElementById('cbArtiste');
+    const titreEl = document.getElementById('cbTitre');
+    const previewEl = document.getElementById('cbPreview');
+    const errorEl = document.getElementById('cbError');
+
+    function showError(msg){
+      errorEl.textContent = msg;
+      errorEl.style.display = msg ? 'block' : 'none';
+    }
+
+    async function refreshPreview(){
+      if(!document.body.contains(artisteEl)) return; // modale fermée entre-temps
+      const seq = ++previewSeq;
+      const artiste = artisteEl.value, titre = titreEl.value;
+      preview = null;
+      modalSubmitBtn.textContent = 'Créer et ouvrir';
+      if(!artiste.trim() || !titre.trim()){
+        previewEl.innerHTML = `<span class="cp-hint">Le dossier « ARTISTE - TITRE » et le fichier « TITRE.cpr » seront créés.</span>`;
+        showError('');
+        return;
+      }
+      try {
+        const p = await invoke('preview_cubase_session', { artiste, titre });
+        if(seq !== previewSeq || !modalOverlay.classList.contains('active')) return;
+        preview = p;
+        showError('');
+        let note = '';
+        if(p.projetExiste){
+          note = `<div class="cp-warn">Ce projet existe déjà : il sera ouvert tel quel, sans être écrasé.</div>`;
+          modalSubmitBtn.textContent = 'Ouvrir le projet existant';
+        } else if(p.dossierExiste){
+          note = `<div class="cp-warn">Le dossier existe déjà : le projet y sera ajouté.</div>`;
+        }
+        previewEl.innerHTML = `
+          <div class="cp-label">Sera créé :</div>
+          <div class="cp-path">${escapeHtml(p.cheminProjet)}</div>
+          ${note}`;
+      } catch(err) {
+        if(seq !== previewSeq) return;
+        previewEl.innerHTML = '';
+        showError(String(err));
+      }
+    }
+
+    async function submit(){
+      if(busy) return;
+      if(!artisteEl.value.trim() || !titreEl.value.trim()){
+        showError("Saisissez l'artiste / groupe et le titre du son.");
+        return;
+      }
+      busy = true;
+      modalSubmitBtn.disabled = true;
+      try {
+        const res = await invoke('create_cubase_session', {
+          artiste: artisteEl.value,
+          titre: titreEl.value,
+          ouvrirSiExiste: !!(preview && preview.projetExiste),
+        });
+        closeModal();
+        showGlobalError(cubaseSuccessMessage(res), 'ok');
+      } catch(err) {
+        showError(String(err));
+        refreshPreview();
+      } finally {
+        busy = false;
+        modalSubmitBtn.disabled = false;
+      }
+    }
+
+    let debounce = null;
+    for(const el of [artisteEl, titreEl]){
+      el.addEventListener('input', () => { clearTimeout(debounce); debounce = setTimeout(refreshPreview, 150); });
+      el.addEventListener('keydown', e => {
+        if(e.key !== 'Enter') return;
+        e.preventDefault();
+        if(el === artisteEl && !titreEl.value.trim()) titreEl.focus();
+        else submit();
+      });
+    }
+    refreshPreview();
+  }
+
+  // ---- Réglages : chemin du modèle .cpr et dossier racine des sessions ----
+  async function openCubaseSettingsModal(onSaved){
+    let s;
+    try { s = await invoke('get_cubase_settings'); }
+    catch(err) { showGlobalError(String(err)); return; }
+
+    openModal('Réglages Cubase', `
+      <div class="f-group">
+        <label class="f-required">Projet modèle (.cpr)</label>
+        <div class="path-picker">
+          <input type="text" id="csTemplate" placeholder="ex. D:\\Cubase\\Modeles\\RECORDING PRO.cpr" value="${escapeHtml(s.templatePath)}">
+          <button type="button" class="btn-secondary" id="csTemplateBrowse">Parcourir…</button>
+        </div>
+      </div>
+      <div class="f-group">
+        <label class="f-required">Dossier racine des sessions</label>
+        <div class="path-picker">
+          <input type="text" id="csRoot" placeholder="ex. E:\\Sessions" value="${escapeHtml(s.sessionsRoot)}">
+          <button type="button" class="btn-secondary" id="csRootBrowse">Parcourir…</button>
+        </div>
+      </div>
+      <p class="cp-hint" style="margin:0;">Chaque session sera créée ici sous la forme « ARTISTE - TITRE\\TITRE.cpr ».</p>
+      <div class="modal-error" id="csError" style="display:none;"></div>
+    `, async () => {
+      const errorEl = document.getElementById('csError');
+      try {
+        await invoke('save_cubase_settings', { settings: {
+          templatePath: document.getElementById('csTemplate').value,
+          sessionsRoot: document.getElementById('csRoot').value,
+        }});
+        closeModal();
+        if(onSaved) onSaved();
+        else showGlobalError('Réglages Cubase enregistrés.', 'ok');
+      } catch(err) {
+        errorEl.textContent = String(err);
+        errorEl.style.display = 'block';
+      }
+    });
+
+    const templateEl = document.getElementById('csTemplate');
+    const rootEl = document.getElementById('csRoot');
+    document.getElementById('csTemplateBrowse').addEventListener('click', async () => {
+      const path = await invoke('plugin:dialog|open', { options: {
+        title: 'Choisir le projet modèle Cubase',
+        defaultPath: templateEl.value || undefined,
+        filters: [{ name: 'Projet Cubase', extensions: ['cpr'] }],
+      }});
+      if(path) templateEl.value = path;
+    });
+    document.getElementById('csRootBrowse').addEventListener('click', async () => {
+      const path = await invoke('plugin:dialog|open', { options: {
+        title: 'Choisir le dossier racine des sessions',
+        directory: true,
+        defaultPath: rootEl.value || undefined,
+      }});
+      if(path) rootEl.value = path;
+    });
+  }
+
+  document.getElementById('cubaseSessionBtn').addEventListener('click', () => openCubaseSessionModal());
+  document.getElementById('cubaseSettingsBtn').addEventListener('click', () => openCubaseSettingsModal());
+  document.addEventListener('keydown', (e) => {
+    if(e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n'){
+      e.preventDefault(); // sinon WebView2 ouvre une nouvelle fenêtre
+      if(!modalOverlay.classList.contains('active')) openCubaseSessionModal();
+    }
+  });
+
   async function init(){
     try {
       clients = await loadClients();

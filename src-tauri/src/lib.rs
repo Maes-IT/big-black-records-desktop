@@ -1,4 +1,5 @@
 mod commands;
+mod cubase;
 mod db;
 mod models;
 mod seed;
@@ -32,6 +33,12 @@ pub fn run() {
             commands::get_chart_data,
             commands::get_dettes_comparaison,
             commands::save_binary_file,
+            commands::find_client_by_nom,
+            commands::create_client_avec_projet,
+            cubase::get_cubase_settings,
+            cubase::save_cubase_settings,
+            cubase::preview_cubase_session,
+            cubase::create_cubase_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

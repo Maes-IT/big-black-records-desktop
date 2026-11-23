@@ -4,7 +4,7 @@ use tauri::State;
 
 use crate::db::DbState;
 use crate::models::{
-    Client, DashboardStats, DettesComparaison, FiltreCriteria, FiltreResult, ImpayeItem,
+    Client, ClientProjetCree, DashboardStats, DettesComparaison, FiltreCriteria, FiltreResult, ImpayeItem,
     NewClient, NewProjet, Projet, QuartierCount,
 };
 
@@ -515,6 +515,112 @@ pub fn save_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
     std::fs::write(&path, data).map_err(|e| e.to_string())
 }
 
+// ==================== Création combinée client + projet ====================
+
+/// Client existant dont le nom correspond (sans tenir compte des espaces autour ni de la casse).
+fn find_client_by_nom_impl(conn: &Connection, nom: &str) -> Result<Option<Client>, String> {
+    let wanted = nom.trim().to_lowercase();
+    if wanted.is_empty() {
+        return Ok(None);
+    }
+    Ok(list_clients_impl(conn)?
+        .into_iter()
+        .filter(|c| c.nom.trim().to_lowercase() == wanted)
+        .min_by_key(|c| c.id))
+}
+
+/// Titre libre pour ce client : « Titre », sinon « Titre v2 », « Titre v3 »…
+fn titre_disponible(conn: &Connection, client_id: i64, titre: &str) -> Result<String, String> {
+    let base = titre.trim();
+    let mut stmt = conn
+        .prepare("SELECT titre FROM projets WHERE client_id = ?1")
+        .map_err(|e| e.to_string())?;
+    let existants: std::collections::HashSet<String> = stmt
+        .query_map(params![client_id], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|t| t.trim().to_lowercase())
+        .collect();
+    if !existants.contains(&base.to_lowercase()) {
+        return Ok(base.to_string());
+    }
+    let mut n = 2;
+    loop {
+        let candidat = format!("{base} v{n}");
+        if !existants.contains(&candidat.to_lowercase()) {
+            return Ok(candidat);
+        }
+        n += 1;
+    }
+}
+
+/// Crée le client (ou réutilise `rattacher_a`), puis son projet minimal, dans une seule
+/// transaction : si la création du projet échoue, le client n'est pas créé non plus.
+/// Projet minimal : statut « en-cours », impayé, avance/cachet à 0, créé aujourd'hui (heure locale).
+fn create_client_avec_projet_impl(
+    conn: &mut Connection,
+    client: &NewClient,
+    titre: &str,
+    rattacher_a: Option<i64>,
+) -> Result<ClientProjetCree, String> {
+    if titre.trim().is_empty() {
+        return Err("Le titre du projet est obligatoire.".into());
+    }
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+    let (client_row, client_cree) = match rattacher_a {
+        Some(id) => (get_client_impl(&tx, id)?, false),
+        None => (create_client_impl(&tx, client)?, true),
+    };
+
+    let titre_final = titre_disponible(&tx, client_row.id, titre)?;
+    let aujourd_hui: String = tx
+        .query_row("SELECT date('now','localtime')", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let projet = create_projet_impl(
+        &tx,
+        &NewProjet {
+            client_id: client_row.id,
+            titre: titre_final.clone(),
+            genre: String::new(),
+            statut: "en-cours".into(),
+            date_creation: Some(aujourd_hui),
+            date_livraison: None,
+            avance: 0,
+            cachet: 0,
+            statut_paiement: "impaye".into(),
+            solde: None,
+        },
+    )?;
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(ClientProjetCree {
+        titre_renomme: titre_final != titre.trim(),
+        client: client_row,
+        projet,
+        client_cree,
+    })
+}
+
+#[tauri::command]
+pub fn find_client_by_nom(state: State<DbState>, nom: String) -> Result<Option<Client>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    find_client_by_nom_impl(&conn, &nom)
+}
+
+#[tauri::command]
+pub fn create_client_avec_projet(
+    state: State<DbState>,
+    client: NewClient,
+    titre: String,
+    rattacher_a: Option<i64>,
+) -> Result<ClientProjetCree, String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    create_client_avec_projet_impl(&mut conn, &client, &titre, rattacher_a)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -871,5 +977,96 @@ mod tests {
         let read_back = std::fs::read(&path).unwrap();
         assert_eq!(read_back, data);
         std::fs::remove_file(&path).ok();
+    }
+
+    // ---- create_client_avec_projet ----
+
+    fn count(conn: &Connection, table: &str) -> i64 {
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn creates_client_and_minimal_projet_together() {
+        let mut conn = test_conn();
+        let res = create_client_avec_projet_impl(&mut conn, &new_client("KST", "Analakely"), "I Love You", None).unwrap();
+        assert!(res.client_cree);
+        assert!(!res.titre_renomme);
+        assert_eq!(res.client.nom, "KST");
+        assert_eq!(res.projet.client_id, res.client.id);
+        assert_eq!(res.projet.titre, "I Love You");
+        assert_eq!(res.projet.statut, "en-cours");
+        assert_eq!(res.projet.statut_paiement, "impaye");
+        assert_eq!((res.projet.avance, res.projet.cachet), (0, 0));
+        assert!(res.projet.date_creation.is_some());
+        assert_eq!((count(&conn, "clients"), count(&conn, "projets")), (1, 1));
+    }
+
+    #[test]
+    fn empty_titre_creates_nothing() {
+        let mut conn = test_conn();
+        assert!(create_client_avec_projet_impl(&mut conn, &new_client("KST", ""), "  ", None).is_err());
+        assert_eq!((count(&conn, "clients"), count(&conn, "projets")), (0, 0));
+    }
+
+    #[test]
+    fn invalid_client_creates_nothing() {
+        let mut conn = test_conn();
+        assert!(create_client_avec_projet_impl(&mut conn, &new_client(" ", ""), "Titre", None).is_err());
+        assert_eq!((count(&conn, "clients"), count(&conn, "projets")), (0, 0));
+    }
+
+    #[test]
+    fn projet_failure_rolls_back_client() {
+        let mut conn = test_conn();
+        // Fait échouer l'INSERT du projet à l'intérieur de la transaction.
+        conn.execute_batch(
+            "CREATE TRIGGER t_fail BEFORE INSERT ON projets BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+        )
+        .unwrap();
+        let err = create_client_avec_projet_impl(&mut conn, &new_client("KST", ""), "Titre", None).unwrap_err();
+        assert!(err.contains("boom"), "{err}");
+        assert_eq!(count(&conn, "clients"), 0);
+    }
+
+    #[test]
+    fn attaches_projet_to_existing_client() {
+        let mut conn = test_conn();
+        let kst = create_client_impl(&conn, &new_client("KST", "Analakely")).unwrap();
+        let res = create_client_avec_projet_impl(&mut conn, &new_client("ignoré", ""), "Nouveau", Some(kst.id)).unwrap();
+        assert!(!res.client_cree);
+        assert_eq!(res.client.id, kst.id);
+        assert_eq!(res.projet.client_id, kst.id);
+        assert_eq!(count(&conn, "clients"), 1);
+    }
+
+    #[test]
+    fn attaching_to_unknown_client_fails() {
+        let mut conn = test_conn();
+        assert!(create_client_avec_projet_impl(&mut conn, &new_client("X", ""), "T", Some(999)).is_err());
+        assert_eq!(count(&conn, "projets"), 0);
+    }
+
+    #[test]
+    fn duplicate_titre_gets_version_suffix() {
+        let mut conn = test_conn();
+        let first = create_client_avec_projet_impl(&mut conn, &new_client("KST", ""), "I Love You", None).unwrap();
+        let id = Some(first.client.id);
+        let v2 = create_client_avec_projet_impl(&mut conn, &new_client("KST", ""), "i love you ", id).unwrap();
+        assert_eq!(v2.projet.titre, "i love you v2");
+        assert!(v2.titre_renomme);
+        let v3 = create_client_avec_projet_impl(&mut conn, &new_client("KST", ""), "I Love You", id).unwrap();
+        assert_eq!(v3.projet.titre, "I Love You v3");
+        // le même titre chez un autre client n'est pas suffixé
+        let other = create_client_avec_projet_impl(&mut conn, &new_client("Zafy", ""), "I Love You", None).unwrap();
+        assert_eq!(other.projet.titre, "I Love You");
+    }
+
+    #[test]
+    fn find_client_by_nom_ignores_case_and_spaces() {
+        let conn = test_conn();
+        let kst = create_client_impl(&conn, &new_client("KST", "")).unwrap();
+        assert_eq!(find_client_by_nom_impl(&conn, "  kst ").unwrap().map(|c| c.id), Some(kst.id));
+        assert!(find_client_by_nom_impl(&conn, "KS").unwrap().is_none());
+        assert!(find_client_by_nom_impl(&conn, "  ").unwrap().is_none());
     }
 }
