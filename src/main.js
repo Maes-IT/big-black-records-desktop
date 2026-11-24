@@ -11,6 +11,229 @@
     globalErrorTimer = setTimeout(() => globalErrorEl.classList.remove('active'), 6000);
   }
 
+  // ==================== APPARENCE (thème, accent, polices, image de fond) ====================
+  // Ouverte en cliquant sur le logo du studio. Stockage : table `parametres` (src-tauri/src/apparence.rs).
+  // Les clés de THEMES / FONT_SETS doivent correspondre aux listes de apparence.rs.
+  const THEMES = {
+    'or-noir':      { label: 'Or & Noir',    swatch: ['#141109', '#1d1810', '#c9a13a', '#ece2c8'] },
+    'clair':        { label: 'Clair',        swatch: ['#f3eee3', '#fbf8f1', '#a67c1a', '#2a2216'] },
+    'bleu-nuit':    { label: 'Bleu nuit',    swatch: ['#0d1220', '#141b2d', '#5b95f5', '#e2e8f5'] },
+    'rouge-vinyle': { label: 'Rouge vinyle', swatch: ['#140b0b', '#1e1111', '#e0503c', '#f2e2dc'] },
+    'vert-studio':  { label: 'Vert studio',  swatch: ['#0c130f', '#121c16', '#4cc38a', '#e0eee4'] },
+  };
+  const FONT_SETS = {
+    studio:    { label: 'Studio',    hint: 'Polices d\'origine (Internet)',
+                 display: "'Big Shoulders Display', sans-serif", body: "'IBM Plex Sans', sans-serif", mono: "'IBM Plex Mono', monospace" },
+    windows:   { label: 'Windows',   hint: 'Fonctionne hors ligne',
+                 display: "Bahnschrift, 'Segoe UI', sans-serif", body: "'Segoe UI', sans-serif", mono: "Consolas, monospace" },
+    classique: { label: 'Classique', hint: 'Serif, style papier',
+                 display: "Georgia, 'Times New Roman', serif", body: "Cambria, Georgia, serif", mono: "Consolas, monospace" },
+    moderne:   { label: 'Moderne',   hint: 'Net et arrondi',
+                 display: "'Segoe UI Semibold', 'Segoe UI', sans-serif", body: "'Segoe UI', sans-serif", mono: "'Cascadia Mono', Consolas, monospace" },
+  };
+  const FONT_SIZES = [ { label: 'Petit', value: 0.9 }, { label: 'Normal', value: 1 }, { label: 'Grand', value: 1.12 } ];
+  const DEFAULT_APPARENCE = { theme: 'or-noir', accent: null, police: 'studio', taille: 1, assombrissement: 45 };
+  const APPARENCE_CACHE_KEY = 'bbr-apparence';
+
+  let apparence = { ...DEFAULT_APPARENCE };
+  let fondUrl = null; // URL blob: de l'image de fond actuelle
+
+  function applyAppearance(a){
+    const root = document.documentElement;
+    root.dataset.theme = THEMES[a.theme] ? a.theme : 'or-noir';
+    if(a.accent) root.style.setProperty('--gold', a.accent);
+    else root.style.removeProperty('--gold');
+    const f = FONT_SETS[a.police] || FONT_SETS.studio;
+    root.style.setProperty('--font-display', f.display);
+    root.style.setProperty('--font-body', f.body);
+    root.style.setProperty('--font-mono', f.mono);
+    root.style.setProperty('--font-scale', String(a.taille || 1));
+    root.style.setProperty('--bg-veil', `color-mix(in srgb, var(--bg) ${a.assombrissement}%, transparent)`);
+    document.body.classList.toggle('has-bg-image', !!fondUrl);
+    root.style.setProperty('--bg-image', fondUrl ? `url("${fondUrl}")` : 'none');
+  }
+
+  function cacheAppearance(a){
+    try { localStorage.setItem(APPARENCE_CACHE_KEY, JSON.stringify(a)); } catch(_) {}
+  }
+
+  // Les graphiques sont dessinés en SVG : les redessiner pour qu'ils suivent les nouvelles couleurs/polices.
+  function rerenderAfterAppearance(){
+    try { renderSalesChart(); renderRevenueChart(); renderScale(); } catch(_) {}
+  }
+
+  async function loadFondImage(mime){
+    if(fondUrl){ URL.revokeObjectURL(fondUrl); fondUrl = null; }
+    if(!mime) return;
+    try {
+      const buf = await invoke('get_fond_image');
+      fondUrl = URL.createObjectURL(new Blob([buf], { type: mime }));
+    } catch(err) {
+      console.error('get_fond_image failed', err);
+    }
+  }
+
+  async function loadAppearance(){
+    try {
+      const info = await invoke('get_apparence');
+      apparence = { theme: info.theme, accent: info.accent, police: info.police, taille: info.taille, assombrissement: info.assombrissement };
+      await loadFondImage(info.fondMime);
+    } catch(err) {
+      console.error('get_apparence failed', err);
+    }
+    applyAppearance(apparence);
+    cacheAppearance(apparence);
+  }
+
+  // Application immédiate depuis le cache local, avant la réponse de la base (évite un flash de l'ancien thème).
+  try {
+    const cached = JSON.parse(localStorage.getItem(APPARENCE_CACHE_KEY) || 'null');
+    if(cached) { apparence = { ...DEFAULT_APPARENCE, ...cached }; applyAppearance(apparence); }
+  } catch(_) {}
+
+  function openAppearanceModal(){
+    const initial = { ...apparence };
+    let draft = { ...apparence };
+    let saved = false;
+    const themeAccent = () => getComputedStyle(document.documentElement).getPropertyValue('--gold').trim();
+
+    const themeCards = Object.entries(THEMES).map(([key, t]) => `
+      <button type="button" class="ap-choice" data-theme-key="${key}">
+        <span class="ap-swatch">${t.swatch.map(c => `<span style="background:${c}"></span>`).join('')}</span>
+        ${escapeHtml(t.label)}
+      </button>`).join('');
+    const fontCards = Object.entries(FONT_SETS).map(([key, f]) => `
+      <button type="button" class="ap-choice" data-font-key="${key}">
+        <span class="ap-font-sample" style="font-family:${escapeHtml(f.display)}">Big Black<small style="font-family:${escapeHtml(f.body)}">${escapeHtml(f.label)} — ${escapeHtml(f.hint)}</small></span>
+      </button>`).join('');
+    const sizeBtns = FONT_SIZES.map(s => `<button type="button" data-size="${s.value}">${s.label}</button>`).join('');
+
+    openModal('Apparence', `
+      <div class="ap-section">
+        <p class="ap-title">Thème</p>
+        <div class="ap-grid" id="apThemes">${themeCards}</div>
+      </div>
+      <div class="ap-section">
+        <p class="ap-title">Couleur d'accent</p>
+        <div class="ap-row">
+          <input type="color" id="apAccent" title="Choisir la couleur d'accent">
+          <button type="button" class="btn-secondary" id="apAccentReset">Couleur du thème</button>
+          <span class="cp-hint" id="apAccentHint"></span>
+        </div>
+      </div>
+      <div class="ap-section">
+        <p class="ap-title">Police</p>
+        <div class="ap-grid" id="apFonts">${fontCards}</div>
+        <div class="ap-row" style="margin-top:10px;">
+          <span class="cp-hint">Taille du texte</span>
+          <div class="ap-seg" id="apSizes">${sizeBtns}</div>
+        </div>
+      </div>
+      <div class="ap-section">
+        <p class="ap-title">Image de fond</p>
+        <div class="ap-row">
+          <div class="ap-bg-preview" id="apBgPreview"></div>
+          <div style="display:flex; flex-direction:column; gap:8px; flex:1; min-width:180px;">
+            <div class="ap-row">
+              <button type="button" class="btn-secondary" id="apBgPick">Choisir une image…</button>
+              <button type="button" class="btn-secondary" id="apBgClear">Retirer</button>
+            </div>
+            <label class="cp-hint" for="apDim">Assombrissement de l'image : <span id="apDimVal"></span></label>
+            <input type="range" id="apDim" min="0" max="90" step="5">
+          </div>
+        </div>
+        <p class="cp-hint" style="margin:8px 0 0;">PNG, JPG ou WEBP, 15 Mo maximum. L'image est copiée dans l'application et appliquée immédiatement.</p>
+      </div>
+      <div class="ap-row" style="justify-content:flex-end;">
+        <button type="button" class="btn-secondary" id="apReset">Réinitialiser l'apparence</button>
+      </div>
+      <div class="modal-error" id="apError" style="display:none;"></div>
+    `, async () => {
+      try {
+        apparence = await invoke('save_apparence', { apparence: draft });
+        saved = true;
+        cacheAppearance(apparence);
+        closeModal();
+        showGlobalError('Apparence enregistrée.', 'ok');
+      } catch(err) {
+        showErr(err);
+      }
+    }, {
+      wide: true,
+      // Annuler / Échap / clic à côté : on revient à l'apparence d'avant (sauf l'image, déjà copiée).
+      onClose: () => { if(!saved){ apparence = initial; applyAppearance(initial); rerenderAfterAppearance(); } },
+    });
+
+    const errorEl = document.getElementById('apError');
+    const showErr = (err) => { errorEl.textContent = String(err); errorEl.style.display = 'block'; };
+
+    function refresh(){
+      applyAppearance(draft);
+      rerenderAfterAppearance();
+      document.querySelectorAll('#apThemes .ap-choice').forEach(b => b.classList.toggle('active', b.dataset.themeKey === draft.theme));
+      document.querySelectorAll('#apFonts .ap-choice').forEach(b => b.classList.toggle('active', b.dataset.fontKey === draft.police));
+      document.querySelectorAll('#apSizes button').forEach(b => b.classList.toggle('active', Number(b.dataset.size) === Number(draft.taille)));
+      const accentEl = document.getElementById('apAccent');
+      const color = draft.accent || themeAccent();
+      if(/^#[0-9a-f]{6}$/i.test(color)) accentEl.value = color;
+      document.getElementById('apAccentHint').textContent = draft.accent ? 'Personnalisée' : 'Celle du thème';
+      document.getElementById('apAccentReset').disabled = !draft.accent;
+      document.getElementById('apDim').value = draft.assombrissement;
+      document.getElementById('apDimVal').textContent = `${draft.assombrissement} %`;
+      const prev = document.getElementById('apBgPreview');
+      prev.style.backgroundImage = fondUrl ? `url("${fondUrl}")` : 'none';
+      prev.textContent = fondUrl ? '' : 'Aucune image';
+      document.getElementById('apBgClear').disabled = !fondUrl;
+      document.getElementById('apDim').disabled = !fondUrl;
+    }
+
+    document.getElementById('apThemes').addEventListener('click', e => {
+      const b = e.target.closest('[data-theme-key]'); if(!b) return;
+      draft.theme = b.dataset.themeKey; refresh();
+    });
+    document.getElementById('apFonts').addEventListener('click', e => {
+      const b = e.target.closest('[data-font-key]'); if(!b) return;
+      draft.police = b.dataset.fontKey; refresh();
+    });
+    document.getElementById('apSizes').addEventListener('click', e => {
+      const b = e.target.closest('[data-size]'); if(!b) return;
+      draft.taille = Number(b.dataset.size); refresh();
+    });
+    document.getElementById('apAccent').addEventListener('input', e => { draft.accent = e.target.value; refresh(); });
+    document.getElementById('apAccentReset').addEventListener('click', () => { draft.accent = null; refresh(); });
+    document.getElementById('apDim').addEventListener('input', e => { draft.assombrissement = Number(e.target.value); refresh(); });
+    document.getElementById('apReset').addEventListener('click', () => { draft = { ...DEFAULT_APPARENCE }; refresh(); });
+
+    document.getElementById('apBgPick').addEventListener('click', async () => {
+      const path = await invoke('plugin:dialog|open', { options: {
+        title: "Choisir l'image de fond",
+        filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+      }});
+      if(!path) return;
+      try {
+        const mime = await invoke('set_fond_image', { path });
+        await loadFondImage(mime);
+        errorEl.style.display = 'none';
+        refresh();
+      } catch(err) { showErr(err); }
+    });
+    document.getElementById('apBgClear').addEventListener('click', async () => {
+      try {
+        await invoke('clear_fond_image');
+        await loadFondImage(null);
+        refresh();
+      } catch(err) { showErr(err); }
+    });
+
+    refresh();
+  }
+
+  const brandLogoEl = document.getElementById('brandLogo');
+  brandLogoEl.addEventListener('click', () => openAppearanceModal());
+  brandLogoEl.addEventListener('keydown', e => {
+    if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); openAppearanceModal(); }
+  });
+
   const TRASH_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
 
   // ---------- Adaptateurs DB (SQLite via invoke) -> forme historique du prototype ----------
@@ -232,9 +455,13 @@
   const modalCancelBtn = document.getElementById('modalCancel');
   const modalSubmitBtn = document.getElementById('modalSubmit');
   let modalSubmitHandler = null;
+  let modalOnClose = null;
+  const modalBoxEl = modalOverlay.querySelector('.modal-box');
 
   function openModal(title, bodyHtml, onSubmit, options = {}){
     modalTitleEl.textContent = title;
+    modalBoxEl.classList.toggle('wide', !!options.wide);
+    modalOnClose = options.onClose || null;
     modalBodyEl.innerHTML = bodyHtml;
     modalSubmitHandler = onSubmit;
     modalSubmitBtn.textContent = options.submitLabel || 'Enregistrer';
@@ -244,6 +471,9 @@
     if(firstInput) setTimeout(() => firstInput.focus(), 50);
   }
   function closeModal(){
+    const onClose = modalOnClose;
+    modalOnClose = null;
+    if(onClose) onClose();
     modalOverlay.classList.remove('active');
     modalBodyEl.innerHTML = '';
     modalSubmitHandler = null;
@@ -898,11 +1128,12 @@
   // Années ayant des projets + année en cours (get_chart_years), rechargées à chaque rendu du T.D.B.
   let YEARS = [CURRENT_YEAR];
 
+  // Variables CSS : les graphiques suivent le thème choisi dans « Apparence ».
   const chartTheme = {
-    ink: '#ece2c8',
-    gold: '#c9a13a',
-    line: '#3a3120',
-    dim: '#a89873'
+    ink: 'var(--ink)',
+    gold: 'var(--gold)',
+    line: 'var(--line)',
+    dim: 'var(--ink-dim-solid)'
   };
 
   let salesYear = CURRENT_YEAR, revenueYear = CURRENT_YEAR;
@@ -954,7 +1185,7 @@
     [0, 0.25, 0.5, 0.75, 1].forEach(f => {
       const gy = padT + chartH * (1 - f);
       grid += `<line x1="${padL}" y1="${gy.toFixed(1)}" x2="${w - padR}" y2="${gy.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`;
-      y += `<text x="${padL - 6}" y="${(gy + 3).toFixed(1)}" text-anchor="end" font-family="'IBM Plex Mono',monospace" font-size="9" fill="var(--ink-dim-solid)">${formatShort(Math.round(max * f))}</text>`;
+      y += `<text x="${padL - 6}" y="${(gy + 3).toFixed(1)}" text-anchor="end" style="font-family:var(--font-mono)" font-size="9" fill="var(--ink-dim-solid)">${formatShort(Math.round(max * f))}</text>`;
     });
     return grid + y;
   }
@@ -971,7 +1202,7 @@
       const x = padL + i * (barW + gap) + gap / 2;
       const y = padT + chartH - bh;
       bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(bh,1).toFixed(1)}" rx="2.5" fill="var(--gold)"/>`;
-      labels += `<text x="${(x + barW / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle" font-family="'IBM Plex Mono',monospace" font-size="9" fill="var(--ink-dim-solid)">${MONTHS[i]}</text>`;
+      labels += `<text x="${(x + barW / 2).toFixed(1)}" y="${h - 8}" text-anchor="middle" style="font-family:var(--font-mono)" font-size="9" fill="var(--ink-dim-solid)">${MONTHS[i]}</text>`;
     });
     const grid = chartGridAndLabels(w, h, padL, padR, padT, padB, max);
     return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:100%;">${grid}${bars}${labels}</svg>`;
@@ -987,9 +1218,9 @@
     const bottom = (padT + chartH).toFixed(1);
     const areaPath = `${linePath} L${pts[pts.length - 1][0].toFixed(1)},${bottom} L${pts[0][0].toFixed(1)},${bottom} Z`;
     const dots = pts.map(p => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.5" fill="var(--gold)"/>`).join('');
-    const labels = MONTHS.map((m, i) => `<text x="${(padL + i * stepX).toFixed(1)}" y="${h - 8}" text-anchor="middle" font-family="'IBM Plex Mono',monospace" font-size="9" fill="var(--ink-dim-solid)">${m}</text>`).join('');
+    const labels = MONTHS.map((m, i) => `<text x="${(padL + i * stepX).toFixed(1)}" y="${h - 8}" text-anchor="middle" style="font-family:var(--font-mono)" font-size="9" fill="var(--ink-dim-solid)">${m}</text>`).join('');
     const grid = chartGridAndLabels(w, h, padL, padR, padT, padB, max);
-    return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:100%;">${grid}<path d="${areaPath}" fill="rgba(201,161,58,0.14)" stroke="none"/><path d="${linePath}" fill="none" stroke="var(--gold)" stroke-width="2"/>${dots}${labels}</svg>`;
+    return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:100%;">${grid}<path d="${areaPath}" style="fill:color-mix(in srgb, var(--gold) 14%, transparent)" stroke="none"/><path d="${linePath}" fill="none" stroke="var(--gold)" stroke-width="2"/>${dots}${labels}</svg>`;
   }
 
   async function renderSalesChart(){
@@ -1044,10 +1275,10 @@
           <path d="M180,62 Q205,90 230,62 Z" fill="none" stroke="var(--gold)" stroke-width="2.5"/>
         </g>
         <circle cx="130" cy="28" r="6" fill="var(--gold)"/>
-        <text x="55" y="115" text-anchor="middle" fill="${chartTheme.ink}" font-family="'IBM Plex Mono', monospace" font-size="18" font-weight="600">${a}</text>
-        <text x="55" y="132" text-anchor="middle" fill="${chartTheme.dim}" font-family="'IBM Plex Mono', monospace" font-size="10">${label.aLabel}</text>
-        <text x="205" y="115" text-anchor="middle" fill="${chartTheme.ink}" font-family="'IBM Plex Mono', monospace" font-size="18" font-weight="600">${b}</text>
-        <text x="205" y="132" text-anchor="middle" fill="${chartTheme.dim}" font-family="'IBM Plex Mono', monospace" font-size="10">${label.bLabel}</text>
+        <text x="55" y="115" text-anchor="middle" fill="${chartTheme.ink}" style="font-family:var(--font-mono)" font-size="18" font-weight="600">${a}</text>
+        <text x="55" y="132" text-anchor="middle" fill="${chartTheme.dim}" style="font-family:var(--font-mono)" font-size="10">${label.aLabel}</text>
+        <text x="205" y="115" text-anchor="middle" fill="${chartTheme.ink}" style="font-family:var(--font-mono)" font-size="18" font-weight="600">${b}</text>
+        <text x="205" y="132" text-anchor="middle" fill="${chartTheme.dim}" style="font-family:var(--font-mono)" font-size="10">${label.bLabel}</text>
       </svg>
     `;
   }
@@ -1548,6 +1779,7 @@
   });
 
   async function init(){
+    await loadAppearance();
     try {
       clients = await loadClients();
     } catch(err) {

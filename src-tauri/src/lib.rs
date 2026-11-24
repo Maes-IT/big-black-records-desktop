@@ -1,3 +1,4 @@
+mod apparence;
 mod commands;
 mod cubase;
 mod db;
@@ -55,6 +56,11 @@ pub fn run() {
             commands::save_binary_file,
             commands::find_client_by_nom,
             commands::create_client_avec_projet,
+            apparence::get_apparence,
+            apparence::save_apparence,
+            apparence::set_fond_image,
+            apparence::get_fond_image,
+            apparence::clear_fond_image,
             cubase::get_cubase_settings,
             cubase::save_cubase_settings,
             cubase::preview_cubase_session,
