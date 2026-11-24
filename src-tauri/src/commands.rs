@@ -2,10 +2,10 @@ use rusqlite::{named_params, params, Connection, Row};
 use std::collections::HashMap;
 use tauri::State;
 
-use crate::db::DbState;
+use crate::db::{DataDir, DbState};
 use crate::models::{
-    Client, ClientProjetCree, DashboardStats, DettesComparaison, FiltreCriteria, FiltreResult, ImpayeItem,
-    NewClient, NewProjet, Projet, QuartierCount,
+    BackupInfo, Client, ClientProjetCree, DashboardStats, DettesComparaison, FiltreCriteria, FiltreResult, ImpayeItem,
+    NewClient, NewProjet, Projet, QuartierCount, RestoreResult,
 };
 
 fn row_to_client(row: &Row) -> rusqlite::Result<Client> {
@@ -181,6 +181,15 @@ fn list_projets_impl(conn: &Connection, client_id: i64) -> Result<Vec<Projet>, S
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
 }
 
+/// Tous les projets en une requête (évite un appel par client au démarrage).
+fn list_all_projets_impl(conn: &Connection) -> Result<Vec<Projet>, String> {
+    let mut stmt = conn
+        .prepare(&format!("SELECT {PROJET_COLUMNS} FROM projets ORDER BY client_id, id"))
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], row_to_projet).map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
 fn get_projet_impl(conn: &Connection, id: i64) -> Result<Projet, String> {
     conn.query_row(
         &format!("SELECT {PROJET_COLUMNS} FROM projets WHERE id = ?1"),
@@ -323,8 +332,8 @@ fn get_dashboard_stats_impl(conn: &Connection) -> Result<DashboardStats, String>
                 COALESCE(SUM(CASE WHEN statut_paiement='paye' THEN 1 ELSE 0 END),0),
                 COALESCE(SUM(CASE WHEN statut_paiement='paye' THEN cachet ELSE 0 END),0),
                 COALESCE(SUM(CASE WHEN statut_paiement='impaye' THEN 1 ELSE 0 END),0),
-                COALESCE(SUM(CASE WHEN statut_paiement='impaye' THEN solde ELSE 0 END),0)
-             FROM projets",
+                COALESCE(SUM(CASE WHEN statut_paiement='impaye' THEN reste ELSE 0 END),0)
+             FROM projets_view",
             [],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
@@ -333,7 +342,9 @@ fn get_dashboard_stats_impl(conn: &Connection) -> Result<DashboardStats, String>
     let impayes: Vec<ImpayeItem> = {
         let mut stmt = conn
             .prepare(
-                "SELECT client_nom, titre, genre, solde FROM projets_view
+                // `reste` (et non `solde`) : un impayé sans solde saisi doit
+                // compter cachet - avance, comme dans le filtre.
+                "SELECT client_nom, titre, genre, reste FROM projets_view
                  WHERE statut_paiement = 'impaye' ORDER BY id",
             )
             .map_err(|e| e.to_string())?;
@@ -362,6 +373,22 @@ fn get_dashboard_stats_impl(conn: &Connection) -> Result<DashboardStats, String>
         impayes_total,
         impayes,
     })
+}
+
+/// Années proposées dans les onglets des graphiques : celles qui ont des projets,
+/// plus l'année en cours, triées par ordre croissant.
+fn get_chart_years_impl(conn: &Connection) -> Result<Vec<i64>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT CAST(strftime('%Y', date_creation) AS INTEGER) FROM projets
+             WHERE strftime('%Y', date_creation) IS NOT NULL
+             UNION
+             SELECT CAST(strftime('%Y', 'now', 'localtime') AS INTEGER)
+             ORDER BY 1",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |r| r.get::<_, i64>(0)).map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
 }
 
 fn get_chart_data_impl(conn: &Connection, annee: i64, kind: &str) -> Result<Vec<i64>, String> {
@@ -463,6 +490,18 @@ pub fn delete_client(state: State<DbState>, id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn list_all_projets(state: State<DbState>) -> Result<Vec<Projet>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    list_all_projets_impl(&conn)
+}
+
+#[tauri::command]
+pub fn get_chart_years(state: State<DbState>) -> Result<Vec<i64>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    get_chart_years_impl(&conn)
+}
+
+#[tauri::command]
 pub fn list_projets(state: State<DbState>, client_id: i64) -> Result<Vec<Projet>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     list_projets_impl(&conn, client_id)
@@ -510,9 +549,69 @@ pub fn get_dettes_comparaison(state: State<DbState>, periode: String) -> Result<
     get_dettes_comparaison_impl(&conn, &periode)
 }
 
+/// N'accepte que les exports de l'application (PDF / XLSX) vers un chemin absolu :
+/// la page ne peut pas s'en servir pour écraser un fichier quelconque.
+fn check_export_path(path: &str) -> Result<(), String> {
+    let p = std::path::Path::new(path);
+    if !p.is_absolute() {
+        return Err("Chemin d'export invalide.".into());
+    }
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("pdf") | Some("xlsx") => Ok(()),
+        _ => Err("Seuls les exports .pdf et .xlsx sont autorisés.".into()),
+    }
+}
+
 #[tauri::command]
 pub fn save_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    check_export_path(&path)?;
     std::fs::write(&path, data).map_err(|e| e.to_string())
+}
+
+// ==================== Sauvegarde / restauration de la base ====================
+
+fn check_backup_path(path: &str) -> Result<(), String> {
+    let p = std::path::Path::new(path);
+    if !p.is_absolute() {
+        return Err("Chemin de sauvegarde invalide.".into());
+    }
+    match p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref() {
+        Some("sqlite") => Ok(()),
+        _ => Err("Une sauvegarde doit avoir l'extension .sqlite.".into()),
+    }
+}
+
+#[tauri::command]
+pub fn get_backup_info(data_dir: State<DataDir>) -> Result<BackupInfo, String> {
+    let dir = crate::db::backup_dir(&data_dir.0);
+    let files = crate::db::list_backups(&dir)?
+        .into_iter()
+        .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(String::from))
+        .collect();
+    Ok(BackupInfo { dir: dir.display().to_string(), files })
+}
+
+#[tauri::command]
+pub fn backup_db(state: State<DbState>, path: String) -> Result<(), String> {
+    check_backup_path(&path)?;
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    crate::db::backup_to(&conn, std::path::Path::new(&path))
+}
+
+#[tauri::command]
+pub fn restore_db(state: State<DbState>, data_dir: State<DataDir>, path: String) -> Result<RestoreResult, String> {
+    check_backup_path(&path)?;
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    let safety = crate::db::restore_from(
+        &mut conn,
+        std::path::Path::new(&path),
+        &crate::db::backup_dir(&data_dir.0),
+    )?;
+    Ok(RestoreResult { safety_backup: safety.display().to_string() })
 }
 
 // ==================== Création combinée client + projet ====================
@@ -626,8 +725,8 @@ mod tests {
     use super::*;
 
     fn test_conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(include_str!("../migrations/schema.sql")).unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
+        crate::db::migrate(&mut conn).unwrap();
         conn
     }
 
@@ -921,6 +1020,60 @@ mod tests {
         assert_eq!(stats.impayes[0].titre, "Freestyle");
     }
 
+    #[test]
+    fn export_path_only_allows_absolute_pdf_and_xlsx() {
+        let base = std::env::temp_dir();
+        assert!(check_export_path(base.join("a.pdf").to_str().unwrap()).is_ok());
+        assert!(check_export_path(base.join("a.XLSX").to_str().unwrap()).is_ok());
+        assert!(check_export_path(base.join("a.exe").to_str().unwrap()).is_err());
+        assert!(check_export_path(base.join("noext").to_str().unwrap()).is_err());
+        assert!(check_export_path("relatif.pdf").is_err());
+    }
+
+    #[test]
+    fn list_all_projets_returns_every_client_projects() {
+        let conn = test_conn();
+        seed_filter_dataset(&conn);
+        let all = list_all_projets_impl(&conn).unwrap();
+        assert_eq!(all.len(), 4);
+        let mut ids: Vec<_> = all.iter().map(|p| p.client_id).collect();
+        ids.dedup();
+        assert_eq!(ids.len(), 2, "triés par client");
+    }
+
+    #[test]
+    fn chart_years_include_project_years_and_current_year() {
+        let conn = test_conn();
+        seed_filter_dataset(&conn); // projets en 2025 et 2026
+        let years = get_chart_years_impl(&conn).unwrap();
+        let now: i64 = conn
+            .query_row("SELECT CAST(strftime('%Y','now','localtime') AS INTEGER)", [], |r| r.get(0))
+            .unwrap();
+        assert!(years.contains(&2025) && years.contains(&2026) && years.contains(&now));
+        assert!(years.windows(2).all(|w| w[0] < w[1]), "triées, sans doublon");
+    }
+
+    #[test]
+    fn backup_path_must_be_absolute_sqlite() {
+        let base = std::env::temp_dir();
+        assert!(check_backup_path(base.join("s.sqlite").to_str().unwrap()).is_ok());
+        assert!(check_backup_path(base.join("s.pdf").to_str().unwrap()).is_err());
+        assert!(check_backup_path("s.sqlite").is_err());
+    }
+
+    #[test]
+    fn dashboard_impayes_use_reste_when_solde_missing() {
+        let conn = test_conn();
+        let c = create_client_impl(&conn, &new_client("C", "Q")).unwrap();
+        create_projet_impl(&conn, &new_projet(c.id, "AvecSolde", "en-cours", Some("2026-01-01"), 100, 1000, "impaye", Some(400))).unwrap();
+        create_projet_impl(&conn, &new_projet(c.id, "SansSolde", "attente", Some("2026-01-01"), 200, 1000, "impaye", None)).unwrap();
+        let stats = get_dashboard_stats_impl(&conn).unwrap();
+        assert_eq!(stats.impayes_total, 400 + 800);
+        let montant = |t: &str| stats.impayes.iter().find(|i| i.titre == t).unwrap().solde;
+        assert_eq!(montant("AvecSolde"), 400);
+        assert_eq!(montant("SansSolde"), 800);
+    }
+
     // ---- get_chart_data ----
 
     #[test]
@@ -971,7 +1124,7 @@ mod tests {
 
     #[test]
     fn save_binary_file_writes_exact_bytes() {
-        let path = std::env::temp_dir().join("bbr_test_save_binary_file.bin");
+        let path = std::env::temp_dir().join("bbr_test_save_binary_file.pdf");
         let data = vec![1u8, 2, 3, 4, 5];
         save_binary_file(path.to_string_lossy().to_string(), data.clone()).unwrap();
         let read_back = std::fs::read(&path).unwrap();

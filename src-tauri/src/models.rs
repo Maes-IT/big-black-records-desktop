@@ -1,5 +1,21 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupInfo {
+    /// Dossier des sauvegardes automatiques.
+    pub dir: String,
+    /// Sauvegardes présentes dans ce dossier, de la plus récente à la plus ancienne.
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreResult {
+    /// Copie de l'état d'avant restauration, pour pouvoir revenir en arrière.
+    pub safety_backup: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Client {

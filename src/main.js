@@ -45,13 +45,14 @@
   }
 
   async function loadClients(){
-    const rows = await invoke('list_clients');
-    const loaded = [];
-    for(const row of rows){
-      const projetRows = await invoke('list_projets', { clientId: row.id });
-      loaded.push(clientFromRow(row, projetRows.map(projetFromRow)));
+    // 2 requêtes au total (et non une par client), puis regroupement par client.
+    const [rows, projetRows] = await Promise.all([invoke('list_clients'), invoke('list_all_projets')]);
+    const byClient = new Map();
+    for(const p of projetRows){
+      if(!byClient.has(p.clientId)) byClient.set(p.clientId, []);
+      byClient.get(p.clientId).push(projetFromRow(p));
     }
-    return loaded;
+    return rows.map(row => clientFromRow(row, byClient.get(row.id) || []));
   }
 
   // ---------- DONNÉES (chargées depuis SQLite au démarrage, voir init() en bas de fichier) ----------
@@ -81,14 +82,14 @@
         li.className = c.id === activeClientId ? 'active' : '';
         li.tabIndex = 0;
         li.innerHTML = `
-          <span class="dot"></span><span class="name">${c.nom}</span>
+          <span class="dot"></span><span class="name">${escapeHtml(c.nom)}</span>
           <button class="icon-btn danger" title="Supprimer ce client">${TRASH_SVG}</button>
         `;
         li.addEventListener('click', () => selectClient(c.id));
         li.querySelector('.icon-btn.danger').addEventListener('click', (e) => {
           e.stopPropagation();
           openConfirmModal('Supprimer le client',
-            `Supprimer « ${c.nom} » et l'ensemble de ses projets (${c.projets.length}) ? Cette action est irréversible.`,
+            `Supprimer « ${escapeHtml(c.nom)} » et l'ensemble de ses projets (${c.projets.length}) ? Cette action est irréversible.`,
             () => deleteClient(c.id));
         });
         clientListEl.appendChild(li);
@@ -133,11 +134,11 @@
     }
     clientNameEl.textContent = c.nom;
     personalFieldsEl.innerHTML = `
-      <div class="field"><label>Nom du groupe</label><div class="value">${c.nom}</div></div>
-      <div class="field"><label>Responsable</label><div class="value">${c.responsable}</div></div>
-      <div class="field"><label>Téléphone</label><div class="value">${c.tel}</div></div>
-      <div class="field"><label>Quartier</label><div class="value">${c.quartier}</div></div>
-      <div class="field"><label>Observation</label><div class="value obs ${c.obs ? '' : 'empty'}">${c.obs || 'Aucune observation'}</div></div>
+      <div class="field"><label>Nom du groupe</label><div class="value">${escapeHtml(c.nom)}</div></div>
+      <div class="field"><label>Responsable</label><div class="value">${escapeHtml(c.responsable)}</div></div>
+      <div class="field"><label>Téléphone</label><div class="value">${escapeHtml(c.tel)}</div></div>
+      <div class="field"><label>Quartier</label><div class="value">${escapeHtml(c.quartier)}</div></div>
+      <div class="field"><label>Observation</label><div class="value obs ${c.obs ? '' : 'empty'}">${c.obs ? escapeHtml(c.obs) : 'Aucune observation'}</div></div>
     `;
     renderProjectList();
   }
@@ -158,11 +159,11 @@
       li.tabIndex = 0;
       li.innerHTML = `
         <div class="p-row">
-          <div class="p-title">${p.titre}</div>
+          <div class="p-title">${escapeHtml(p.titre)}</div>
           <button class="icon-btn danger" title="Supprimer ce projet">${TRASH_SVG}</button>
         </div>
         <div class="p-meta">
-          <span>${p.genre}</span>
+          <span>${escapeHtml(p.genre)}</span>
           <span class="status-chip ${statusClass[p.statut]}">${statusLabel[p.statut]}</span>
         </div>
       `;
@@ -170,7 +171,7 @@
       li.querySelector('.icon-btn.danger').addEventListener('click', (e) => {
         e.stopPropagation();
         openConfirmModal('Supprimer le projet',
-          `Supprimer le projet « ${p.titre} » ? Cette action est irréversible.`,
+          `Supprimer le projet « ${escapeHtml(p.titre)} » ? Cette action est irréversible.`,
           () => deleteProject(p.id));
       });
       projectListEl.appendChild(li);
@@ -202,13 +203,13 @@
     }
     projectDetailBodyEl.innerHTML = `
       <div class="field-list">
-        <div class="field"><label>Titre</label><div class="value">${p.titre}</div></div>
-        <div class="field"><label>Genre</label><div class="value">${p.genre}</div></div>
+        <div class="field"><label>Titre</label><div class="value">${escapeHtml(p.titre)}</div></div>
+        <div class="field"><label>Genre</label><div class="value">${escapeHtml(p.genre)}</div></div>
         <div class="field"><label>Statut</label><div class="value"><span class="status-chip ${statusClass[p.statut]}">${statusLabel[p.statut]}</span></div></div>
-        <div class="field"><label>Avance</label><div class="value">${p.avance}</div></div>
-        <div class="field"><label>Cachet</label><div class="value">${p.cachet}</div></div>
-        <div class="field"><label>Date de création</label><div class="value">${p.creation}</div></div>
-        <div class="field"><label>Date de livraison</label><div class="value">${p.livraison}</div></div>
+        <div class="field"><label>Avance</label><div class="value">${escapeHtml(p.avance)}</div></div>
+        <div class="field"><label>Cachet</label><div class="value">${escapeHtml(p.cachet)}</div></div>
+        <div class="field"><label>Date de création</label><div class="value">${escapeHtml(p.creation)}</div></div>
+        <div class="field"><label>Date de livraison</label><div class="value">${escapeHtml(p.livraison)}</div></div>
       </div>
       <div class="project-cubase">
         <button class="cubase-btn" id="projectCubaseBtn" title="Crée « ${escapeHtml(c.nom)} - ${escapeHtml(p.titre)} » si besoin, puis ouvre le projet dans Cubase">
@@ -487,24 +488,24 @@
     openModal(`Modifier — ${c.nom}`, `
       <div class="f-group">
         <label class="f-required">Nom du groupe</label>
-        <input type="text" id="mNom" value="${c.nom.replace(/"/g,'&quot;')}">
+        <input type="text" id="mNom" value="${escapeHtml(c.nom)}">
         <div class="modal-error" id="mNomError" style="display:none;">Le nom du groupe est obligatoire.</div>
       </div>
       <div class="f-group">
         <label>Responsable</label>
-        <input type="text" id="mResponsable" value="${c.responsable.replace(/"/g,'&quot;')}">
+        <input type="text" id="mResponsable" value="${escapeHtml(c.responsable)}">
       </div>
       <div class="f-group">
         <label>Téléphone</label>
-        <input type="text" id="mTel" value="${c.tel.replace(/"/g,'&quot;')}">
+        <input type="text" id="mTel" value="${escapeHtml(c.tel)}">
       </div>
       <div class="f-group">
         <label>Quartier</label>
-        <input type="text" id="mQuartier" value="${c.quartier.replace(/"/g,'&quot;')}">
+        <input type="text" id="mQuartier" value="${escapeHtml(c.quartier)}">
       </div>
       <div class="f-group">
         <label>Observation</label>
-        <textarea id="mObs">${c.obs}</textarea>
+        <textarea id="mObs">${escapeHtml(c.obs)}</textarea>
       </div>
     `, async () => {
       const nom = document.getElementById('mNom').value.trim();
@@ -546,12 +547,12 @@
     openModal(`Modifier — ${p.titre}`, `
       <div class="f-group">
         <label class="f-required">Titre du projet</label>
-        <input type="text" id="mTitre" value="${p.titre.replace(/"/g,'&quot;')}">
+        <input type="text" id="mTitre" value="${escapeHtml(p.titre)}">
         <div class="modal-error" id="mTitreError" style="display:none;">Le titre est obligatoire.</div>
       </div>
       <div class="f-group">
         <label>Genre</label>
-        <input type="text" id="mGenre" value="${p.genre.replace(/"/g,'&quot;')}">
+        <input type="text" id="mGenre" value="${escapeHtml(p.genre)}">
       </div>
       <div class="f-group">
         <label>État du projet</label>
@@ -854,7 +855,7 @@
   function renderQuartier(stats){
     const listEl = document.getElementById('quartierList');
     listEl.innerHTML = stats.quartiers.map(({quartier, count}) => `
-      <li><span class="qname">${quartier}</span><span class="qcount">${count}</span></li>
+      <li><span class="qname">${escapeHtml(quartier)}</span><span class="qcount">${count}</span></li>
     `).join('');
     document.getElementById('quartierTotal').textContent = stats.clientsTotal;
   }
@@ -883,8 +884,8 @@
     el.innerHTML = stats.impayes.map(p => `
       <li>
         <div>
-          <div class="il-title">${p.clientNom} — ${p.titre}</div>
-          <div class="il-genre">${p.genre}</div>
+          <div class="il-title">${escapeHtml(p.clientNom)} — ${escapeHtml(p.titre)}</div>
+          <div class="il-genre">${escapeHtml(p.genre)}</div>
         </div>
         <div class="il-amount">${formatAr(p.solde)}</div>
       </li>
@@ -893,7 +894,9 @@
 
   // ---- Charts: agrégations mensuelles réelles via get_chart_data ----
   const MONTHS = ['J','F','M','A','M','J','J','A','S','O','N','D'];
-  const YEARS = [2026, 2027, 2028, 2029];
+  const CURRENT_YEAR = new Date().getFullYear();
+  // Années ayant des projets + année en cours (get_chart_years), rechargées à chaque rendu du T.D.B.
+  let YEARS = [CURRENT_YEAR];
 
   const chartTheme = {
     ink: '#ece2c8',
@@ -902,7 +905,20 @@
     dim: '#a89873'
   };
 
-  let salesYear = 2026, revenueYear = 2026;
+  let salesYear = CURRENT_YEAR, revenueYear = CURRENT_YEAR;
+
+  async function refreshChartYears(){
+    try {
+      const years = await invoke('get_chart_years');
+      if(years.length) YEARS = years;
+    } catch(err) {
+      console.error('get_chart_years failed', err);
+    }
+    // Si l'année affichée n'existe plus (ex. après une restauration), revenir à la plus récente.
+    const fallback = YEARS.includes(CURRENT_YEAR) ? CURRENT_YEAR : YEARS[YEARS.length - 1];
+    if(!YEARS.includes(salesYear)) salesYear = fallback;
+    if(!YEARS.includes(revenueYear)) revenueYear = fallback;
+  }
 
   function buildYearTabs(container, chartKey){
     container.innerHTML = YEARS.map(y => `<button data-y="${y}" class="${(chartKey==='sales'?salesYear:revenueYear)===y ? 'active':''}">${y}</button>`).join('');
@@ -1045,7 +1061,6 @@
     });
   });
 
-  let tdbInitialized = false;
   async function renderTDB(){
     let stats;
     try {
@@ -1061,11 +1076,9 @@
     renderPaiementStats(stats);
     renderImpayeList(stats);
     renderScale();
-    if(!tdbInitialized){
-      buildYearTabs(document.querySelector('.year-tabs[data-chart="sales"]'), 'sales');
-      buildYearTabs(document.querySelector('.year-tabs[data-chart="revenue"]'), 'revenue');
-      tdbInitialized = true;
-    }
+    await refreshChartYears();
+    buildYearTabs(document.querySelector('.year-tabs[data-chart="sales"]'), 'sales');
+    buildYearTabs(document.querySelector('.year-tabs[data-chart="revenue"]'), 'revenue');
     renderSalesChart();
     renderRevenueChart();
   }
@@ -1114,7 +1127,7 @@
     const sel = document.getElementById('fQuartier');
     const current = sel.value;
     const quartiers = [...new Set(clients.map(c => c.quartier.split(',')[0].trim()))].sort();
-    sel.innerHTML = `<option value="">Tous les quartiers</option>` + quartiers.map(q => `<option value="${q}">${q}</option>`).join('');
+    sel.innerHTML = `<option value="">Tous les quartiers</option>` + quartiers.map(q => `<option value="${escapeHtml(q)}">${escapeHtml(q)}</option>`).join('');
     if(quartiers.includes(current)) sel.value = current;
   }
 
@@ -1189,7 +1202,7 @@
     const chips = chipDefs(f);
     const chipsEl = document.getElementById('activeChips');
     chipsEl.innerHTML = chips.length
-      ? chips.map(c => `<span class="chip">${c.label}<button data-key="${c.key}" aria-label="Retirer ce filtre">×</button></span>`).join('')
+      ? chips.map(c => `<span class="chip">${escapeHtml(c.label)}<button data-key="${escapeHtml(c.key)}" aria-label="Retirer ce filtre">×</button></span>`).join('')
       : `<span class="chip-empty">Aucun filtre actif — tous les projets sont affichés</span>`;
     chipsEl.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => clearFiltreChip(btn.dataset.key)));
 
@@ -1209,13 +1222,13 @@
       <div class="result-card" data-client="${p.clientId}" data-pid="${p.id}">
         <div class="rc-top">
           <div class="rc-client-block">
-            <div class="rc-client">${p.clientNom}</div>
-            <div class="rc-meta"><span>${p.clientTel}</span><span>${p.clientQuartier}</span></div>
+            <div class="rc-client">${escapeHtml(p.clientNom)}</div>
+            <div class="rc-meta"><span>${escapeHtml(p.clientTel)}</span><span>${escapeHtml(p.clientQuartier)}</span></div>
           </div>
           <span class="status-chip ${statusClass[p.statut]}">${statusLabel[p.statut]}</span>
         </div>
-        <div class="rc-project">${p.titre}</div>
-        <div class="rc-genre">${p.genre}</div>
+        <div class="rc-project">${escapeHtml(p.titre)}</div>
+        <div class="rc-genre">${escapeHtml(p.genre)}</div>
         <div class="rc-financials">
           <div class="rc-fin-item"><span class="l">Avance</span><span class="v">${p.avance}</span></div>
           <div class="rc-fin-item"><span class="l">Cachet</span><span class="v">${p.cachet}</span></div>
@@ -1456,6 +1469,75 @@
     });
   }
 
+  // ==================== SAUVEGARDES DE LA BASE ====================
+  // Sauvegarde auto quotidienne au lancement (côté Rust), export manuel, restauration.
+  async function openBackupModal(){
+    let info;
+    try { info = await invoke('get_backup_info'); }
+    catch(err) { showGlobalError(String(err)); return; }
+
+    const last = info.files[0];
+    openModal('Sauvegardes', `
+      <p class="cp-hint" style="margin:0 0 12px;">
+        Une sauvegarde automatique est faite chaque jour au lancement (les 14 dernières sont gardées) dans :<br>
+        <code style="user-select:all; word-break:break-all;">${escapeHtml(info.dir)}</code>
+      </p>
+      <p class="cp-hint" style="margin:0 0 16px;">
+        ${last ? `Plus récente : <strong>${escapeHtml(last)}</strong> (${info.files.length} au total)` : 'Aucune sauvegarde pour le moment.'}
+      </p>
+      <div class="f-group" style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn-secondary" id="bkExport">Exporter une sauvegarde…</button>
+        <button type="button" class="btn-secondary" id="bkRestore">Restaurer une sauvegarde…</button>
+      </div>
+      <p class="cp-hint" style="margin:8px 0 0;">
+        Restaurer remplace toutes les données actuelles. Une copie de l'état actuel est faite juste avant, dans le même dossier.
+      </p>
+      <div class="modal-error" id="bkError" style="display:none;"></div>
+    `, () => closeModal(), { submitLabel: 'Fermer' });
+
+    const errorEl = document.getElementById('bkError');
+    const showErr = (err) => { errorEl.textContent = String(err); errorEl.style.display = 'block'; };
+
+    document.getElementById('bkExport').addEventListener('click', async () => {
+      const stamp = new Date().toISOString().slice(0, 10);
+      const path = await invoke('plugin:dialog|save', { options: {
+        title: 'Exporter une sauvegarde de la base',
+        defaultPath: `bigblack-sauvegarde-${stamp}.sqlite`,
+        filters: [{ name: 'Sauvegarde Big Black Records', extensions: ['sqlite'] }],
+      }});
+      if(!path) return;
+      try {
+        await invoke('backup_db', { path });
+        closeModal();
+        showGlobalError('Sauvegarde exportée.', 'ok');
+      } catch(err) { showErr(err); }
+    });
+
+    document.getElementById('bkRestore').addEventListener('click', async () => {
+      const path = await invoke('plugin:dialog|open', { options: {
+        title: 'Choisir la sauvegarde à restaurer',
+        defaultPath: info.dir,
+        filters: [{ name: 'Sauvegarde Big Black Records', extensions: ['sqlite'] }],
+      }});
+      if(!path) return;
+      const name = String(path).split(/[\\/]/).pop();
+      openConfirmModal('Restaurer la sauvegarde',
+        `Remplacer toutes les données actuelles par « ${escapeHtml(name)} » ? L'état actuel sera d'abord copié dans le dossier des sauvegardes.`,
+        async () => {
+          try {
+            await invoke('restore_db', { path });
+          } catch(err) {
+            showGlobalError(String(err));
+            return;
+          }
+          // Recharger toute l'interface sur les données restaurées.
+          location.reload();
+        });
+      modalSubmitBtn.textContent = 'Restaurer';
+    });
+  }
+
+  document.getElementById('backupBtn').addEventListener('click', () => openBackupModal());
   document.getElementById('cubaseSessionBtn').addEventListener('click', () => openCubaseSessionModal());
   document.getElementById('cubaseSettingsBtn').addEventListener('click', () => openCubaseSettingsModal());
   document.addEventListener('keydown', (e) => {

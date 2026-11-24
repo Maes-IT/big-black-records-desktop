@@ -361,8 +361,8 @@ mod tests {
     }
 
     fn test_conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(include_str!("../migrations/schema.sql")).unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
+        crate::db::migrate(&mut conn).unwrap();
         conn
     }
 
